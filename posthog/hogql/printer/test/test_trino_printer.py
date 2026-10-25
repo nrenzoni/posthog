@@ -690,10 +690,10 @@ def test_coerces_strict_trino_types_after_property_lowering() -> None:
         "trino",
     )
 
-    assert 'CAST(json_extract_scalar("users"."properties", %(hogql_val_0)s) AS DOUBLE) / CAST(1000 AS DOUBLE)' in sql
-    assert 'sum(CAST(json_extract_scalar("users"."properties", %(hogql_val_1)s) AS DOUBLE))' in sql
-    assert 'CAST(json_extract_scalar("users"."properties", %(hogql_val_2)s) AS BOOLEAN) = true' in sql
-    assert '"users"."created_at" >= CAST(%(hogql_val_3)s AS TIMESTAMP)' in sql
+    assert 'CAST(json_extract_scalar("users"."properties", \'$["duration"]\') AS DOUBLE) / CAST(1000 AS DOUBLE)' in sql
+    assert 'sum(CAST(json_extract_scalar("users"."properties", \'$["amount"]\') AS DOUBLE))' in sql
+    assert 'CAST(json_extract_scalar("users"."properties", \'$["failed"]\') AS BOOLEAN) = true' in sql
+    assert '"users"."created_at" >= CAST(%(hogql_val_0)s AS TIMESTAMP)' in sql
 
 
 def test_prints_iso_datetime_and_heterogeneous_concat_for_trino() -> None:
@@ -758,9 +758,10 @@ def test_preserves_clickhouse_json_array_indexing() -> None:
     assert "AS ARRAY(JSON)), 2)" in sql
     assert 'AS ARRAY(JSON)), CAST(length("users"."user_id") AS INTEGER))' in sql
     assert sql.count("element_at(") == 9
-    assert 'CAST(json_extract("users"."properties", %(hogql_val_1)s) AS ARRAY(JSON))' in sql
+    assert 'CAST(json_extract("users"."properties", \'$["items"]\') AS ARRAY(JSON))' in sql
+    assert 'json_extract("users"."user_id", \'$["key.with.dot"]\')' in sql
     assert "CAST(TRY(element_at(" in sql
-    assert context.values == {"hogql_val_0": '$["key.with.dot"]', "hogql_val_1": '$["items"]'}
+    assert context.values == {}
 
 
 @pytest.mark.parametrize("operator", ["+", "-", "*", "/", "%"])
@@ -770,10 +771,10 @@ def test_chained_arithmetic_keeps_only_used_parameters(operator: str) -> None:
 
     sql, _ = prepare_and_print_ast(parse_select(f"SELECT {f' {operator} '.join(terms)} FROM users"), context, "trino")
 
-    assert context.values == {f"hogql_val_{index}": f'$["metric_{index}"]' for index in range(6)}
+    assert context.values == {}
     rendered_terms = [
         'coalesce(TRY(CAST(json_extract_scalar("users"."user_id", '
-        f"%(hogql_val_{index})s) AS DOUBLE)), CAST(0 AS DOUBLE))"
+        f"'$[\"metric_{index}\"]') AS DOUBLE)), CAST(0 AS DOUBLE))"
         for index in range(6)
     ]
     expected = rendered_terms[0]
@@ -865,14 +866,9 @@ def test_lowers_event_property_backed_fields_to_the_physical_json_column() -> No
         "trino",
     )
 
-    assert 'json_extract_scalar("tenant"."posthog"."events"."properties", %(hogql_val_0)s)' in sql
-    assert 'json_extract_scalar("tenant"."posthog"."events"."properties", %(hogql_val_1)s)' in sql
-    assert 'json_extract_scalar("tenant"."posthog"."events"."properties", %(hogql_val_2)s)' in sql
-    assert context.values == {
-        "hogql_val_0": '$["$session_id"]',
-        "hogql_val_1": '$["$window_id"]',
-        "hogql_val_2": '$["$group_0"]',
-    }
+    for key in ("$session_id", "$window_id", "$group_0"):
+        assert f'json_extract_scalar("tenant"."posthog"."events"."properties", \'$["{key}"]\')' in sql
+    assert context.values == {}
 
 
 def test_lowers_event_element_materializations_to_the_physical_chain() -> None:
@@ -894,6 +890,35 @@ def test_lowers_event_element_materializations_to_the_physical_chain() -> None:
 
 
 @pytest.mark.parametrize(
+    "key, expected_path",
+    [
+        ("plan", "'$[\"plan\"]'"),
+        ("it's", "'$[\"it''s\"]'"),
+        ("%(hogql_val_0)s", "'$[\"%(hogql_val_0)s\"]'"),
+        ('a"b\\c', '\'$["a\\"b\\\\c"]\''),
+    ],
+)
+def test_grouped_json_property_prints_the_same_path_in_projection_and_group_by(key: str, expected_path: str) -> None:
+    context = _context_with_trino_table()
+    escaped_key = key.replace("\\", "\\\\").replace("'", "\\'")
+
+    sql, _ = prepare_and_print_ast(
+        parse_select(
+            f"SELECT JSONExtractString(properties, '{escaped_key}') = '' AS missing, count() FROM users "
+            f"GROUP BY JSONExtractString(properties, '{escaped_key}')"
+        ),
+        context,
+        "trino",
+    )
+    sql, values = convert_pyformat_placeholders(sql, context.values)
+
+    grouped = f'json_extract_scalar("users"."properties", {expected_path})'
+    assert sql.count(grouped) == 2
+    assert sql.split(" GROUP BY ")[1].count(grouped) == 1
+    assert values == [""]
+
+
+@pytest.mark.parametrize(
     "expression, group_by, order_by, expected_order, expected_values",
     [
         ("user_id", "account_id", "total", "2 ASC", []),
@@ -904,7 +929,7 @@ def test_lowers_event_element_materializations_to_the_physical_chain() -> None:
             "1 DESC",
             ["suffix"],
         ),
-        ("properties.color", "account_id", "account_id", "1 ASC", ['$["color"]']),
+        ("properties.color", "account_id", "account_id", "1 ASC", []),
         ("0", "account_id", "account_id", "1 ASC", []),
         ("user_id", "account_id", "2", "2 ASC", []),
         (
@@ -1126,8 +1151,8 @@ def test_prints_empty_for_lowered_json_property_after_second_resolution() -> Non
         "trino",
     )
 
-    assert 'json_extract_scalar("users"."properties", %(hogql_val_0)s) <> \'\'' in sql
-    assert context.values == {"hogql_val_0": '$["task_run_id"]'}
+    assert 'json_extract_scalar("users"."properties", \'$["task_run_id"]\') <> \'\'' in sql
+    assert context.values == {}
 
 
 def test_lowers_nested_json_keys_and_values_raw() -> None:
@@ -1135,7 +1160,8 @@ def test_lowers_nested_json_keys_and_values_raw() -> None:
     sql, _ = prepare_and_print_ast(parse_select("SELECT JSONExtractKeysAndValuesRaw('{}', 'teams')"), context, "trino")
 
     assert "map_entries(CAST(json_extract(" in sql
-    assert context.values == {"hogql_val_0": "{}", "hogql_val_1": '$["teams"]'}
+    assert context.values == {"hogql_val_0": "{}"}
+    assert "'$[\"teams\"]'" in sql
 
 
 def test_lowers_currency_conversion_with_the_trino_exchange_rate_table() -> None:
@@ -1852,7 +1878,7 @@ def test_rejects_with_fill_before_printing_invalid_trino_sql() -> None:
         ("date_part('year', created_at)", 'EXTRACT(YEAR FROM "users"."created_at")'),
         (
             "JSONExtractKeysAndValues(properties, 'Float64')",
-            'map_entries(transform_values(CAST(json_extract("users"."properties", %(hogql_val_0)s) AS MAP(VARCHAR, JSON))',
+            'map_entries(transform_values(CAST(json_extract("users"."properties", \'$\') AS MAP(VARCHAR, JSON))',
         ),
         ("['a', 'b'][2:]", "slice(ARRAY[%(hogql_val_0)s, %(hogql_val_1)s], 2, 2147483647)"),
     ],

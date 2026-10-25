@@ -10,7 +10,7 @@ from posthog.hogql.database.schema.numbers import NumbersTable
 from posthog.hogql.database.trino_locator import resolve_trino_table_locator
 from posthog.hogql.database.trino_unnest_table import TrinoUnnestTable
 from posthog.hogql.errors import ImpossibleASTError
-from posthog.hogql.escape_sql import escape_trino_identifier
+from posthog.hogql.escape_sql import escape_trino_identifier, escape_trino_string
 from posthog.hogql.functions import find_hogql_aggregation
 from posthog.hogql.printer.postgres import PostgresPrinter
 from posthog.hogql.printer.trino_functions import (
@@ -2197,7 +2197,11 @@ class TrinoPrinter(PostgresPrinter):
             else:
                 escaped = str(member).replace("\\", "\\\\").replace('"', '\\"')
                 path += f'["{escaped}"]'
-        return self.context.add_value(path)
+        if "\0" in path:
+            return self.context.add_value(path)
+        # Inlined, because Trino treats every bound `?` as distinct, so a grouped JSON property
+        # would never match the same property in the projection.
+        return escape_trino_string(path)
 
     def _visit_lambda_array_call(self, node: ast.Call, target: str) -> str:
         if (
