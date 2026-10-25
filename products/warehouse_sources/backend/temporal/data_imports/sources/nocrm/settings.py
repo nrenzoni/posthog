@@ -63,7 +63,8 @@ LEAD_FANOUT = DependentEndpointConfig(
     resolve_field="id",
     include_from_parent=["id"],
     parent_field_renames={"id": "lead_id"},
-    parent_params={"order": "id", "direction": "asc"},
+    # `/leads` hides unassigned leads unless asked, which would drop their histories and comments.
+    parent_params={"order": "id", "direction": "asc", "include_unassigned": "true"},
     # A lead deleted between the parent listing and its child fetch 404s; skip it.
     child_response_actions=[{"status_code": 404, "action": "ignore"}],
 )

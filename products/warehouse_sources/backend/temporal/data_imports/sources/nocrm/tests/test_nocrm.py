@@ -204,18 +204,22 @@ class TestSourceResponse:
         assert result.response.partition_keys is None
 
 
+_LEADS_QUERY = {"include_unassigned": ("true",)}
+
+
 class TestFanout:
     @parameterized.expand(
         [
-            ("lead_action_histories", "/api/v2/leads", "/api/v2/leads/{id}/action_histories", {}, True),
-            ("lead_comments", "/api/v2/leads", "/api/v2/leads/{id}/comments", {}, False),
-            ("follow_ups", "/api/v2/users", "/api/v2/follow_ups", {"status": ("todo,standby,done",)}, False),
+            ("lead_action_histories", "/api/v2/leads", _LEADS_QUERY, "/api/v2/leads/{id}/action_histories", {}, True),
+            ("lead_comments", "/api/v2/leads", _LEADS_QUERY, "/api/v2/leads/{id}/comments", {}, False),
+            ("follow_ups", "/api/v2/users", {}, "/api/v2/follow_ups", {"status": ("todo,standby,done",)}, False),
         ]
     )
     def test_child_requests_per_parent(
         self,
         endpoint: str,
         parent_path: str,
+        parent_query: dict[str, tuple[str, ...]],
         child_path: str,
         child_query: dict[str, tuple[str, ...]],
         child_paginated: bool,
@@ -233,6 +237,9 @@ class TestFanout:
         assert result.raised is None
         assert [r["id"] for r in result.rows] == [10]
         assert result.rows[0]["lead_id"] == 1
+        parent_requests = [r for r in result.requests if r.path == parent_path]
+        for key, value in parent_query.items():
+            assert parent_requests[0].query[key] == value
         child_requests = [r for r in result.requests if r.path != parent_path]
         assert len(child_requests) == 2
         for request in child_requests:
