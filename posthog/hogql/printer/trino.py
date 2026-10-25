@@ -629,7 +629,7 @@ class TrinoPrinter(PostgresPrinter):
                 self._invalid_function_arguments(node, f"{node.name} expects exactly 2 arguments in Trino mode.")
             return self._visit_membership(node.args[0], node.args[1], negated=name == "notin")
         if name == "arraymax":
-            return self._visit_unary_function(node, "array_max")
+            return f"array_max({self._visit_mapped_array_arg(node)})"
         if name == "arrayenumerate":
             value = self._visit_unary_arg(node)
             return f"IF(cardinality({value}) = 0, CAST(ARRAY[] AS ARRAY(BIGINT)), sequence(1, cardinality({value})))"
@@ -1033,7 +1033,7 @@ class TrinoPrinter(PostgresPrinter):
         if name == "arrayflatten":
             return self._visit_unary_function(node, "flatten")
         if name == "arraymin":
-            return self._visit_unary_function(node, "array_min")
+            return f"array_min({self._visit_mapped_array_arg(node)})"
         if name in {"arrayfirst", "arraylast"}:
             return self._visit_array_first(node)
         if name == "arraylastindex":
@@ -1051,7 +1051,7 @@ class TrinoPrinter(PostgresPrinter):
         if name == "arrayconcat":
             return self._visit_variadic_function(node, "concat", minimum=2)
         if name == "arraysum":
-            value = self._visit_unary_arg(node)
+            value = self._visit_mapped_array_arg(node)
             return f"reduce({value}, CAST(0 AS DOUBLE), (s, x) -> s + coalesce(CAST(x AS DOUBLE), 0), s -> s)"
         if name == "has":
             return self._visit_binary_function(node, "contains")
@@ -2397,6 +2397,12 @@ class TrinoPrinter(PostgresPrinter):
 
     def _visit_unary_function(self, node: ast.Call, target: str) -> str:
         return f"{target}({self._visit_unary_arg(node)})"
+
+    def _visit_mapped_array_arg(self, node: ast.Call) -> str:
+        # ClickHouse's `f(lambda, arr)` form is `f(arrayMap(lambda, arr))`.
+        if len(node.args) == 2 and isinstance(node.args[0], ast.Lambda):
+            return self._visit_lambda_array_call(node, "transform")
+        return self._visit_unary_arg(node)
 
     def _visit_unary_arg(self, node: ast.Call) -> str:
         if len(node.args) != 1:
