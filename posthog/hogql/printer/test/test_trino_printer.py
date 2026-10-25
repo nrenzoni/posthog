@@ -393,6 +393,7 @@ def test_ignores_clickhouse_cte_materialization_hint() -> None:
         ("domain(user_id)", "coalesce(TRY(url_extract_host(CAST("),
         ("multiplyDecimal(1, 2)", "CAST((1 * 2) AS DECIMAL(38, 0))"),
         ("quantileExact(0.9)(length(user_id))", "filter(coalesce(array_agg(length("),
+        ("quantileExact(0.5)(log10(1 + length(user_id)))", "filter(coalesce(array_agg(log10("),
         ("ngramDistance(user_id, 'abc')", "MAP(VARBINARY, BIGINT)"),
         ("formatReadableTimeDelta(3661)", "'hour', 'hours'"),
         (
