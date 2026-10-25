@@ -226,6 +226,26 @@ def test_prepared_trino_transpiler_does_not_rebuild_the_schema_database(
     assert (transpiled.sql, transpiled.values) == snapshot
 
 
+@pytest.mark.parametrize(
+    "week_start_day, expected",
+    [
+        (0, "date_add('day', -1, date_trunc('week', date_add('day', 1, "),
+        (1, "CAST(date_trunc('week', "),
+    ],
+)
+def test_to_start_of_week_accepts_the_week_start_day_stored_on_the_team(week_start_day: int, expected: str) -> None:
+    context = _context_with_trino_table()
+    assert context.database is not None
+    users = context.database.tables.children["users"]
+    # The team row stores the week start day as a plain integer, not as the enum.
+    context.database = Database(week_start_day=week_start_day, include_posthog_tables=False)  # type: ignore[arg-type]
+    context.database.tables.add_child(users)
+
+    sql, _ = prepare_and_print_ast(parse_select("SELECT toStartOfWeek(created_at) FROM users"), context, "trino")
+
+    assert expected in sql
+
+
 def test_prints_trino_lambda_syntax() -> None:
     context = HogQLContext()
     node = ast.Lambda(args=["value"], expr=ast.Field(chain=["value"], type=ast.LambdaArgumentType(name="value")))
