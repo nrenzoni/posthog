@@ -2612,6 +2612,7 @@ def test_lowers_unaliased_left_any_join() -> None:
                 fields={
                     "user_id": StringDatabaseField(name="user_id", nullable=False),
                     "created_at": DateTimeDatabaseField(name="created_at", nullable=False),
+                    "__sync_id": StringDatabaseField(name="_sync_id", hidden=True),
                 },
                 external_data_source_id="source-id",
                 trino_catalog="ducklake",
@@ -2630,6 +2631,7 @@ def test_lowers_unaliased_left_any_join() -> None:
     )
 
     assert "LEFT ANY JOIN" not in sql
+    assert "_sync_id" not in sql
     assert ') AS "people" ON ("users"."user_id" = "people"."user_id")' in sql
 
 
