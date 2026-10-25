@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, ClassVar, NoReturn
 
 from posthog.hogql import ast
 from posthog.hogql.constants import HogQLDialect
+from posthog.hogql.database.models import DatabaseField
+from posthog.hogql.database.s3_table import S3Table
 from posthog.hogql.database.schema.numbers import NumbersTable
 from posthog.hogql.database.trino_locator import resolve_trino_table_locator
 from posthog.hogql.database.trino_unnest_table import TrinoUnnestTable
@@ -1411,8 +1413,24 @@ class TrinoPrinter(PostgresPrinter):
             return ast.ArrayType(item_type=ast.StringType())
         resolved = value_type.resolve_constant_type(self.context) if value_type is not None else None
         if isinstance(resolved, ast.StringArrayType):
+            if isinstance(value_type, ast.FieldType) and self._is_text_backed_warehouse_column(value_type):
+                return ast.StringType(nullable=True)
             return ast.ArrayType(item_type=ast.StringType(), nullable=resolved.nullable)
         return resolved
+
+    def _is_text_backed_warehouse_column(self, field_type: ast.FieldType) -> bool:
+        # Curated source schemas type some JSON text columns as arrays, but the synced column is text.
+        table_type = field_type.table_type
+        if not isinstance(table_type, ast.BaseTableType):
+            return False
+        table = table_type.resolve_database_table(self.context)
+        if not isinstance(table, S3Table) or not table.structure:
+            return False
+        field = field_type.resolve_database_field(self.context)
+        if not isinstance(field, DatabaseField):
+            return False
+        match = re.search(rf"(?:^|,)\s*`{re.escape(field.name)}`\s+(\S+)", table.structure)
+        return match is not None and not match.group(1).removeprefix("Nullable(").startswith("Array(")
 
     def _unnest_column_type(self, table_type: ast.ColumnAliasedTableType, column: str) -> ast.ConstantType | None:
         # UNNEST output columns are untyped in the schema; their type is the matching row field of the unnested array.

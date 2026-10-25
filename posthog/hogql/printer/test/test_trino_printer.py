@@ -19,11 +19,13 @@ from posthog.hogql.database.models import (
     ExpressionField,
     IntegerDatabaseField,
     SavedQuery,
+    StringArrayDatabaseField,
     StringDatabaseField,
     StringJSONDatabaseField,
     TableNode,
     UUIDDatabaseField,
 )
+from posthog.hogql.database.s3_table import DataWarehouseTable
 from posthog.hogql.errors import QueryError
 from posthog.hogql.escape_sql import escape_trino_identifier
 from posthog.hogql.functions.mapping import HOGQL_AGGREGATIONS, HOGQL_CLICKHOUSE_FUNCTIONS, HOGQL_POSTHOG_FUNCTIONS
@@ -2657,6 +2659,44 @@ def test_lowers_unaliased_left_any_join() -> None:
     assert "LEFT ANY JOIN" not in sql
     assert "_sync_id" not in sql
     assert ') AS "people" ON ("users"."user_id" = "people"."user_id")' in sql
+
+
+@pytest.mark.parametrize(
+    "structure, expected",
+    [
+        ("`id` String, `tiers` Nullable(String)", '("prices"."tiers" != %(hogql_val_0)s)'),
+        ("`id` String, `tiers` Array(String)", '(cardinality("prices"."tiers") != 0)'),
+    ],
+)
+def test_curated_array_field_over_a_text_column_compares_as_text(structure: str, expected: str) -> None:
+    database = Database(include_posthog_tables=False)
+    database.tables.add_child(
+        TableNode(
+            name="prices",
+            table=DataWarehouseTable(
+                name="prices",
+                url="http://example.com/prices",
+                format="Parquet",
+                structure=structure,
+                fields={
+                    "id": StringDatabaseField(name="id"),
+                    "tiers": StringArrayDatabaseField(name="tiers"),
+                },
+            ),
+        )
+    )
+    context = HogQLContext(
+        database=database,
+        modifiers=_trino_modifiers(),
+        enable_select_queries=True,
+        limit_top_select=False,
+        restricted_properties=set(),
+        trino_table_locators={"prices": ("ducklake", "stripe", "prices")},
+    )
+
+    sql, _ = prepare_and_print_ast(parse_select("SELECT tiers != '[]' FROM prices"), context, "trino")
+
+    assert expected in sql
 
 
 def test_lowers_any_join_to_the_deduplicated_trino_persons_relation() -> None:
