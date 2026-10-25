@@ -27041,6 +27041,16 @@ export namespace Schemas {
       Number2: 2,
     } as const;
 
+    export interface CopyDashboardGroupRequest {
+      /** Dashboard id the group currently belongs to. */
+      fromDashboardId: number;
+      /**
+         * Key of the tile group to copy.
+         * @maxLength 100
+         */
+      groupKey: string;
+    }
+
     export interface CopyDashboardTemplate {
       /** UUID of a team-scoped template in the same organization. Global and feature-flag templates cannot be copied with this endpoint. */
       source_template_id: string;
@@ -128831,6 +128841,18 @@ export namespace Schemas {
 
 
     export const DashboardsDestroyFormat = {
+      Json: 'json',
+      Txt: 'txt',
+    } as const;
+
+    export type DashboardsCopyGroupCreateParams = {
+    format?: DashboardsCopyGroupCreateFormat;
+    };
+
+    export type DashboardsCopyGroupCreateFormat = typeof DashboardsCopyGroupCreateFormat[keyof typeof DashboardsCopyGroupCreateFormat];
+
+
+    export const DashboardsCopyGroupCreateFormat = {
       Json: 'json',
       Txt: 'txt',
     } as const;

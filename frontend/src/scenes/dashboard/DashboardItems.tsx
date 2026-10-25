@@ -12,6 +12,7 @@ import { DashboardWidgetItem } from '@posthog/products-dashboards/frontend/compo
 import { getDashboardWidgetFetchDisplayError } from '@posthog/products-dashboards/frontend/widgets/constants'
 
 import { ApiError } from 'lib/api'
+import { dashboardWidgetMenusLogic } from 'lib/components/Cards/InsightCard/dashboardWidgetMenusLogic'
 import { EditModeEdge, useResizeHandleScrollbarPassThrough } from 'lib/components/Cards/InsightCard/EditModeEdgeOverlay'
 import { TileDecorations } from 'lib/components/TileDecorations/TileDecorations'
 import { LemonBanner } from 'lib/lemon-ui/LemonBanner'
@@ -114,6 +115,7 @@ export function DashboardItems({ showCreateAnomalyAlertButton }: DashboardItemsP
         effectiveBreakdownColors,
         dataColorThemeId,
         canEditDashboard,
+        copyGroupToDashboardLoading,
         widgetResultsByTileId,
         widgetRefreshStatus,
         scrollToBottomSignal,
@@ -137,12 +139,16 @@ export function DashboardItems({ showCreateAnomalyAlertButton }: DashboardItemsP
         applyWidgetIssueMetadataChange,
         moveToDashboard,
         copyToDashboard,
+        copyGroupToDashboard,
         setDashboardEditing,
         toggleTileGroup,
         updateTileGroupSectionLayout,
         moveTileToSection,
     } = useActions(dashboardLogic)
     const { updateWidgetTile } = useAsyncActions(dashboardLogic)
+    const { copyToDestinations } = useValues(
+        dashboardWidgetMenusLogic({ instanceKey: 'dashboard-groups', dashboardId: dashboard?.id, dashboard_tiles: [] })
+    )
     const { reportDashboardTileRepositioned } = useActions(eventUsageLogic)
     const { push } = useActions(router)
     const { data: surveyLinkedInsights, loading: surveyLinkedInsightsLoading } = useSurveyLinkedInsights({
@@ -813,6 +819,9 @@ export function DashboardItems({ showCreateAnomalyAlertButton }: DashboardItemsP
                 isDropTarget={dropTargetKey === section.key}
                 collapsedTileGroupKeys={collapsedTileGroupKeys}
                 onToggleTileGroup={toggleTileGroup}
+                copyToDestinations={copyToDestinations}
+                onCopyGroupToDashboard={canEditDashboard && isEditablePlacement ? copyGroupToDashboard : undefined}
+                copyLoading={copyGroupToDashboardLoading}
             >
                 {grid}
             </DashboardTileSectionBand>
