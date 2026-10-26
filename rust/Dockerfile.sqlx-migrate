@@ -1,20 +1,55 @@
 # Migration container for running Rust-based database migrations
 # Supports persons, behavioral cohorts, cyclotron migrations
-FROM rust:1.91-bookworm AS builder
+FROM rust:1.99.1-slim-trixie@sha256:1a939748a7cbab172de91a014e3804a97af1394a8c844faa67fce9401c4e40fb AS builder
 
-RUN cargo install sqlx-cli --version 0.8.0 --features native-tls,postgres --no-default-features --locked
+ENV CARGO_BUILD_JOBS=1
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-FROM debian:bookworm-slim
+# Published sqlx-cli 0.8.0 archive; checksum from the official crates.io index.
+# Keep the upstream inventory as well as the narrowly updated build lock.
+ADD --checksum=sha256:ba83be1b4557aa1faae76c3e005483ba5df125cbd24450b08f9587ac018cef97 \
+    https://static.crates.io/crates/sqlx-cli/sqlx-cli-0.8.0.crate /tmp/sqlx-cli.crate
+RUN mkdir -p /opt/sqlx-cli \
+    && tar -xzf /tmp/sqlx-cli.crate -C /opt/sqlx-cli --strip-components=1 \
+    && cp /opt/sqlx-cli/Cargo.lock /opt/sqlx-cli/Cargo.lock.upstream \
+    && rm /tmp/sqlx-cli.crate
+COPY sqlx-cli.Cargo.lock /opt/sqlx-cli/Cargo.lock
+RUN cargo install --path /opt/sqlx-cli --locked --no-default-features --features native-tls,postgres
+
+# Keep the locked source inventory and selected native dependency graph alongside
+# the binary: an OS-only image scan cannot establish Rust dependency coverage.
+RUN set -eu; \
+    set -- /opt/sqlx-cli/Cargo.toml; \
+    mkdir -p /opt/sqlx-provenance; \
+    cp "${1%/Cargo.toml}/Cargo.lock" /opt/sqlx-provenance/Cargo.lock; \
+    cp "${1%/Cargo.toml}/Cargo.lock.upstream" /opt/sqlx-provenance/Cargo.lock.upstream; \
+    printf '%s\n' \
+        'url=https://static.crates.io/crates/sqlx-cli/sqlx-cli-0.8.0.crate' \
+        'sha256=ba83be1b4557aa1faae76c3e005483ba5df125cbd24450b08f9587ac018cef97' \
+        > /opt/sqlx-provenance/source.txt; \
+    cargo tree --manifest-path "$1" --locked --offline \
+        --no-default-features --features native-tls,postgres \
+        --edges normal,build --prefix none --format '{p}|{f}' \
+        > /opt/sqlx-provenance/dependencies.txt; \
+    rustc --version --verbose > /opt/sqlx-provenance/rustc.txt; \
+    sqlx --version > /opt/sqlx-provenance/version.txt; \
+    (cd /usr/local/cargo/bin && sha256sum sqlx) > /opt/sqlx-provenance/sqlx.sha256; \
+    printf '%s\n' 'features=native-tls,postgres' 'default_features=false' \
+        > /opt/sqlx-provenance/build-flags.txt
+
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     libpq5 \
     postgresql-client \
-    libssl3 \
+    libssl3t64 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/local/cargo/bin/sqlx /usr/local/bin/sqlx
+COPY --from=builder /opt/sqlx-provenance/ /usr/local/share/posthog-native/sqlx/
 
 WORKDIR /migrations
 
