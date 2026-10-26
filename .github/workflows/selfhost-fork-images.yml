@@ -1,0 +1,125 @@
+name: Self-host fork images
+
+on:
+    workflow_dispatch:
+        inputs:
+            architecture:
+                description: Native runner and image architecture (not a multiarch manifest)
+                type: choice
+                options:
+                    - amd64
+                    - arm64
+                default: amd64
+                required: true
+            publish:
+                description: Explicitly publish this run's images to fork-owned GHCR packages
+                type: boolean
+                default: false
+                required: true
+
+permissions: {}
+
+concurrency:
+    group: selfhost-fork-images-${{ github.ref }}-${{ inputs.architecture }}
+    cancel-in-progress: false
+
+jobs:
+    build:
+        name: ${{ matrix.image }} (${{ inputs.architecture }})
+        runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+        timeout-minutes: 180
+        permissions:
+            contents: read
+            packages: write
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - image: posthog
+                      dockerfile: Dockerfile
+                      context: .
+                    - image: posthog-node
+                      dockerfile: Dockerfile.node
+                      context: .
+                    - image: sqlx-migrate
+                      dockerfile: rust/Dockerfile.sqlx-migrate
+                      context: ./rust
+        env:
+            # Build-only must not upload even the build-push action's build-record artifact.
+            DOCKER_BUILD_RECORD_UPLOAD: 'false'
+        steps:
+            - name: Checkout
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+              with:
+                  persist-credentials: false
+
+            - name: Compute fork-owned image tag
+              id: image
+              shell: bash
+              env:
+                  REPOSITORY: ${{ github.repository }}
+                  IMAGE: ${{ matrix.image }}
+                  ARCHITECTURE: ${{ inputs.architecture }}
+              run: |
+                  repository="${REPOSITORY,,}"
+                  echo "tag=ghcr.io/${repository}/${IMAGE}:sha-${GITHUB_SHA}-${ARCHITECTURE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
+            - name: Set up native Buildx
+              uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+            # No registry login occurs unless a future dispatch explicitly selects publish=true.
+            - name: Login to fork GHCR
+              if: ${{ inputs.publish }}
+              uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Build native image
+              id: build
+              uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+              with:
+                  context: ${{ matrix.context }}
+                  file: ${{ matrix.dockerfile }}
+                  platforms: linux/${{ inputs.architecture }}
+                  push: ${{ inputs.publish }}
+                  # An ephemeral local OCI archive provides a real image digest without publishing.
+                  outputs: ${{ !inputs.publish && format('type=oci,dest={0}/selfhost-image.tar', runner.temp) || '' }}
+                  tags: ${{ steps.image.outputs.tag }}
+                  labels: |
+                      org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+                      org.opencontainers.image.revision=${{ github.sha }}
+                  build-args: |
+                      COMMIT_HASH=${{ github.sha }}
+                  # Publish includes attestations; execution still builds only the selected native platform.
+                  # Build-only disables attestations, and neither mode publishes remote caches.
+                  provenance: ${{ inputs.publish && 'mode=max' || 'false' }}
+                  sbom: ${{ inputs.publish }}
+                  github-token: ''
+
+            - name: Record build result
+              if: ${{ always() }}
+              shell: bash
+              env:
+                  IMAGE_TAG: ${{ steps.image.outputs.tag }}
+                  IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+                  BUILD_RESULT: ${{ steps.build.outcome }}
+                  PUBLISH: ${{ inputs.publish }}
+                  ARCHITECTURE: ${{ inputs.architecture }}
+              run: |
+                  {
+                      printf '## Native image build (%s)\n\n' "$ARCHITECTURE"
+                      printf -- '- Build result: `%s`\n' "$BUILD_RESULT"
+                      printf -- '- Image tag: `%s`\n' "${IMAGE_TAG:-unavailable}"
+                      printf -- '- Image digest: `%s`\n' "${IMAGE_DIGEST:-unavailable (build did not complete)}"
+                      printf -- '- Registry publication requested: `%s`\n' "$PUBLISH"
+                      printf '\nBuild-only exports stay on the ephemeral runner; no image, remote cache, or build record is uploaded. No deployment is performed.\n'
+                      printf '\n### Action commit digests\n\n'
+                      cat <<'PINS'
+                  - `actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd`
+                  - `docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd`
+                  - `docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc`
+                  - `docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121` (publish-only)
+                  PINS
+                  } >> "$GITHUB_STEP_SUMMARY"
