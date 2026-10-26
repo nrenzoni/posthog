@@ -25,6 +25,12 @@
 #
 # ---------------------------------------------------------
 #
+FROM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS native-go-build
+WORKDIR /code
+COPY clickhouse-udfs/util/scripts/build-legacy-v12.sh clickhouse-udfs/util/scripts/legacy-v12-provenance.json /code/clickhouse-udfs/util/scripts/
+COPY docker/selfhost/build-go.sh /tmp/build-go.sh
+RUN bash /tmp/build-go.sh
+
 # Digest-pinned because the runtime stage copies its `node` binary out of this stage.
 FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS node-base
 WORKDIR /code
@@ -166,6 +172,13 @@ RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
 COPY products/canvas/packages/canvas_builder/ products/canvas/packages/canvas_builder/
 RUN --mount=type=cache,id=npm,target=/root/.npm \
     npm ci --ignore-scripts --omit=dev --no-audit --no-fund --prefix products/canvas/packages/canvas_builder
+
+COPY --from=native-go-build /artifacts/esbuild /tmp/posthog-esbuild
+ARG TARGETARCH
+RUN case "$TARGETARCH" in amd64) suffix=x64 ;; arm64) suffix=arm64 ;; *) exit 1 ;; esac && \
+    install -m 755 "/tmp/posthog-esbuild/$TARGETARCH" \
+        "products/canvas/packages/canvas_builder/node_modules/@esbuild/linux-$suffix/bin/esbuild" && \
+    rm -rf /tmp/posthog-esbuild
 
 # The transpiler bundle externalizes @babel/standalone (its only external runtime require — a
 # self-contained 24MB package with no deps). Materialize it as real files inside the transpiler's
@@ -399,6 +412,8 @@ COPY --chown=posthog:posthog ./bin ./bin/
 COPY --chown=posthog:posthog ./rust/persons_migrations ./rust/persons_migrations/
 COPY --chown=posthog:posthog manage.py manage.py
 COPY --chown=posthog:posthog posthog posthog/
+COPY --from=native-go-build --chown=posthog:posthog /artifacts/v12/json_drop_keys_udf_x86_64 /artifacts/v12/json_drop_keys_udf_aarch64 /code/posthog/user_scripts/v12/
+COPY --from=native-go-build --chown=posthog:posthog /artifacts/v12/legacy-v12-provenance.json /code/posthog/user_scripts/v12/
 COPY --chown=posthog:posthog ee ee/
 COPY --chown=posthog:posthog common/hogvm common/hogvm/
 COPY --chown=posthog:posthog common/migration_utils common/migration_utils/

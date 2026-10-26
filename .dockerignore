@@ -126,6 +126,8 @@ rust/target
 !docker-compose.base.yml
 !docker-compose.dev.yml
 !docker
+!clickhouse-udfs/util/scripts/build-legacy-v12.sh
+!clickhouse-udfs/util/scripts/legacy-v12-provenance.json
 
 # Test / story / spec sources are never needed to build or run any image. Excluding them keeps them
 # out of the COPYed layers and stops test-only edits from busting the collectstatic + frontend-build

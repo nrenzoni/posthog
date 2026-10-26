@@ -1,0 +1,53 @@
+{
+  "qualifiedAt": "2026-10-25",
+  "source": {
+    "repository": "https://github.com/PostHog/clickhouse-json-drop-keys-udf",
+    "revision": "2d235efbaa824368580749edc00064d14c60195a",
+    "archiveUrl": "https://codeload.github.com/PostHog/clickhouse-json-drop-keys-udf/tar.gz/2d235efbaa824368580749edc00064d14c60195a",
+    "archiveSha256": "f2520b38913c967042771fe5f3ee70810ec0345f16717e5da2cca0ac40da00d1",
+    "module": "json_drop_keys_udf",
+    "goModSha256": "757375b9b2da772ef8945fcd3851d97f00f02660a3a5a9b0190a50055c8542e9",
+    "goSumSha256": "586a89562b5e3d59c9ea96838ff64d51b1849a209d81dc16921323e314c0c1be",
+    "mainGoSha256": "c096162d9371e0d2068e0215ab85605658ef15a41d45386052ed51b0162f62c6",
+    "evidence": "Both checked-in v12 JSONDropKeys binaries embed this VCS revision, vcs.modified=false, and module json_drop_keys_udf. This is source provenance, not a reproducible original binary comparison."
+  },
+  "originalArtifacts": {
+    "posthog/user_scripts/v12/json_drop_keys_udf_x86_64": "4a1ebcaf493db23405d9a58bc191a6e3d4f343350dec0cb781ed15880a6cd124",
+    "posthog/user_scripts/v12/json_drop_keys_udf_aarch64": "8750c9d866237743be2370e18dc2f4c009c139b8e7ffa218151dd05bb2265418",
+    "goVersion": "go1.25.6"
+  },
+  "buildToolchain": {
+    "version": "go1.27.3",
+    "releaseMetadata": "https://go.dev/dl/?mode=json",
+    "linuxAmd64": {
+      "url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
+      "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
+    },
+    "linuxArm64": {
+      "url": "https://go.dev/dl/go1.27.3.linux-arm64.tar.gz",
+      "sha256": "a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49"
+    }
+  },
+  "compatibility": {
+    "warning": "Do not overwrite v12 with util/cmd/json_drop_keys_udf: its current implementation preserves dotted JSON keys and propagates drop filters through arrays, unlike v12.",
+    "regressionCommand": "python3 clickhouse-udfs/util/scripts/verify_legacy_v12.py --binary /external-output/json_drop_keys_udf_x86_64 --baseline posthog/user_scripts/v12/json_drop_keys_udf_x86_64",
+    "architectureRequirement": "Run the regression on a matching Linux architecture, or under explicit emulation. The arm64 command substitutes aarch64 for x86_64."
+  },
+  "canvasEsbuild": {
+    "version": "0.28.2",
+    "metadata": "https://registry.npmjs.org/esbuild/0.28.2",
+    "sourceRevision": "609683d892977362a0f99026cb74b96263d728a9",
+    "sourceArchiveUrl": "https://codeload.github.com/evanw/esbuild/tar.gz/609683d892977362a0f99026cb74b96263d728a9",
+    "sourceArchiveSha256": "04cb2d38fb6af093577aa8bf174add7286099b65ef7854480cbbb8ff061cef1f",
+    "sourceRebuildCommand": "GOTOOLCHAIN=local CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=readonly -buildvcs=false -trimpath -ldflags '-s -w -buildid=' -o /external-output/esbuild ./cmd/esbuild",
+    "sourceRebuildRequirement": "Run from the checksum-verified archive with Go 1.27.3; select GOARCH for the image target. Replace the corresponding @esbuild/linux-{x64,arm64}/bin/esbuild after npm ci, keep the matching 0.28.2 JS wrapper, and verify the binary protocol/version through the actual Canvas builder.",
+    "nodeEngine": ">=18",
+    "effectiveBuilderNodeEngine": ">=20 (already required by @posthog/quill and @tailwindcss/oxide; the esbuild upgrade does not raise it)",
+    "officialLinuxBinaryRuntimeVersion": "go1.26.5",
+    "runtimeVersionEvidence": "Downloaded official linux-x64 and linux-arm64 npm tarballs. Each binary contains one distinct Go runtime version string, go1.26.5. Their stripped ELF files have no Go build-info header; do not claim go version -m provenance for them.",
+    "linuxX64BinarySha256": "e1698a3d5c6c0798fee4fd3b5cc816651f460c63d390a7a26ea4beb0b1884100",
+    "linuxArm64BinarySha256": "90bd269553d258e80b19e3ccab4f98f0831f87442a2f056510ce24fd1b425fc2",
+    "tlsVulnerability": "https://vuln.go.dev/ID/GO-2026-4337.json",
+    "qualification": "The bundled go1.26.5 is past the CVE-2025-68121 fixed version, but older than current go1.26.10/go1.27.3. Full current-vulnerability scanning remains required; an npm version upgrade alone does not prove the binary has no other vulnerabilities."
+  }
+}
