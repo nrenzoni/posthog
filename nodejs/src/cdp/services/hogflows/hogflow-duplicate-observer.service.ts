@@ -23,7 +23,7 @@ const hogflowDuplicateInvocationDetectedTotal = new Counter({
 export class HogFlowDuplicateObserverService {
     constructor(
         private readonly redis: RedisV2,
-        private readonly redisMirror: RedisV2
+        private readonly redisMirror: RedisV2 | null
     ) {}
 
     public async observe(
@@ -49,7 +49,7 @@ export class HogFlowDuplicateObserverService {
             const existingId = await dualRead(
                 'hog-flow-duplicate-observer.observe',
                 () => this.redis.useClient({ name: 'hogflow-observe', failOpen: true }, setNxGet),
-                () => this.redisMirror.useClient({ name: 'hogflow-observe-mirror', failOpen: true }, setNxGet),
+                () => this.redisMirror!.useClient({ name: 'hogflow-observe-mirror', failOpen: true }, setNxGet),
                 (primary, secondary) => Boolean(primary) === Boolean(secondary)
             )
             if (existingId && existingId !== invocation.id) {

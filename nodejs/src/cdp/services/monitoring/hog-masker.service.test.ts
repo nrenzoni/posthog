@@ -1,7 +1,13 @@
 import { randomUUID } from 'crypto'
 
 import { HogFlow } from '~/cdp/schema/hogflow'
-import { RedisV2, createRedisV2PoolFromConfig } from '~/common/redis/redis-v2'
+import {
+    RedisClientPipeline,
+    RedisOptions,
+    RedisPipelineResults,
+    RedisV2,
+    createRedisV2PoolFromConfig,
+} from '~/common/redis/redis-v2'
 import { closeHub, createHub } from '~/common/utils/db/hub'
 import { delay } from '~/common/utils/utils'
 import { Hub } from '~/types'
@@ -11,12 +17,88 @@ import { createExampleInvocation, createHogExecutionGlobals, createHogFunction }
 import { createExampleHogFlowInvocation } from '../../_tests/fixtures-hogflows'
 import { createCdpValkeyShadowPools } from '../../cdp-services'
 import { CyclotronJobInvocationHogFunction, HogFunctionType } from '../../types'
+import { configureValkeyReads } from '../../utils/dual-store'
 import { BASE_REDIS_KEY, HogMaskerService } from './hog-masker.service'
 
 const mockNow: jest.SpyInstance = jest.spyOn(Date, 'now')
 
 describe('HogMasker', () => {
     jest.retryTimes(3, { logErrorsBeforeRetry: true })
+
+    describe('single-store pipeline lifecycle', () => {
+        afterEach(() => configureValkeyReads(''))
+
+        it.each([false, true])('only releases stores that acquired claims (shadow enabled: %s)', async (enabled) => {
+            configureValkeyReads('', enabled)
+            const primaryIncr = jest.fn()
+            const secondaryIncr = jest.fn()
+            // Only the commands built by the masker are needed at this test boundary.
+            const primaryPipeline = { incrby: primaryIncr, expire: jest.fn() } as unknown as RedisClientPipeline
+            const secondaryPipeline = { incrby: secondaryIncr, expire: jest.fn() } as unknown as RedisClientPipeline
+            const primary: RedisV2 = {
+                useClient: jest.fn(),
+                usePipeline: jest.fn(
+                    (
+                        _options: RedisOptions,
+                        build: (pipeline: RedisClientPipeline) => void
+                    ): Promise<RedisPipelineResults> => {
+                        build(primaryPipeline)
+                        return Promise.resolve([
+                            [null, 1],
+                            [null, 1],
+                        ])
+                    }
+                ),
+            }
+            const secondary: RedisV2 = {
+                useClient: jest.fn(),
+                usePipeline: jest.fn(
+                    (
+                        _options: RedisOptions,
+                        build: (pipeline: RedisClientPipeline) => void
+                    ): Promise<RedisPipelineResults> => {
+                        build(secondaryPipeline)
+                        return Promise.resolve([
+                            [null, 1],
+                            [null, 1],
+                        ])
+                    }
+                ),
+            }
+            const masker = new HogMaskerService(primary, secondary)
+            const invocation = createExampleInvocation(createHogFunction(HOG_MASK_EXAMPLES.all))
+
+            const result = await masker.filterByMasking([invocation])
+            expect(result.notMasked).toHaveLength(1)
+            expect(primary.usePipeline).toHaveBeenCalledTimes(1)
+            expect(primaryIncr).toHaveBeenCalledTimes(1)
+            expect(primaryIncr).toHaveBeenLastCalledWith(expect.any(String), 1)
+            expect(secondary.usePipeline).toHaveBeenCalledTimes(enabled ? 1 : 0)
+
+            await result.release()
+            expect(primary.usePipeline).toHaveBeenCalledTimes(2)
+            expect(primaryIncr).toHaveBeenLastCalledWith(expect.any(String), -1)
+            expect(secondary.usePipeline).toHaveBeenCalledTimes(enabled ? 2 : 0)
+            expect(secondaryIncr).toHaveBeenCalledTimes(enabled ? 2 : 0)
+        })
+
+        it('accepts a missing mirror without touching it during acquire or release', async () => {
+            configureValkeyReads('', false)
+            const primary: RedisV2 = {
+                useClient: jest.fn(),
+                usePipeline: jest.fn().mockResolvedValue([
+                    [null, 1],
+                    [null, 1],
+                ]),
+            }
+            const result = await new HogMaskerService(primary, null).filterByMasking([
+                createExampleInvocation(createHogFunction(HOG_MASK_EXAMPLES.all)),
+            ])
+            expect(result.notMasked).toHaveLength(1)
+            await expect(result.release()).resolves.toBeUndefined()
+            expect(primary.usePipeline).toHaveBeenCalledTimes(2)
+        })
+    })
     describe('integration', () => {
         let now: number
         let hub: Hub
@@ -41,7 +123,7 @@ describe('HogMasker', () => {
                 poolMinSize: hub.REDIS_POOL_MIN_SIZE,
                 poolMaxSize: hub.REDIS_POOL_MAX_SIZE,
             })
-            valkey = createCdpValkeyShadowPools(hub, 'hog-masker-test').writer
+            valkey = createCdpValkeyShadowPools({ ...hub, CDP_VALKEY_SHADOW_ENABLED: true }, 'hog-masker-test')!.writer
             masker = new HogMaskerService(redis, valkey)
         })
 

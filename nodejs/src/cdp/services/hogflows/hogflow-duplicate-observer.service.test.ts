@@ -48,7 +48,10 @@ describe('HogFlowDuplicateObserverService', () => {
             poolMinSize: hub.REDIS_POOL_MIN_SIZE,
             poolMaxSize: hub.REDIS_POOL_MAX_SIZE,
         })
-        valkey = createCdpValkeyShadowPools(hub, 'hogflow-duplicate-observer-test').writer
+        valkey = createCdpValkeyShadowPools(
+            { ...hub, CDP_VALKEY_SHADOW_ENABLED: true },
+            'hogflow-duplicate-observer-test'
+        )!.writer
     })
 
     afterAll(async () => {

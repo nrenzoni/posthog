@@ -174,7 +174,7 @@ export class CdpApi {
 
     private hogFlowExecutor: HogFlowExecutorService
     private hogWatcher: HogWatcherService
-    private hogWatcherMirror: HogWatcherService
+    private hogWatcherMirror: HogWatcherService | null
     private hogTransformer: HogTransformerService
     private invocationResultsService: InvocationResultsService
     private rerunJobManager: RerunJobManager | null = null
@@ -418,7 +418,7 @@ export class CdpApi {
             const summary = await dualRead(
                 'hog-watcher.getPersistedState',
                 () => this.hogWatcher.getPersistedState(id),
-                () => this.hogWatcherMirror.getPersistedState(id),
+                () => this.hogWatcherMirror!.getPersistedState(id),
                 sameWatcherState
             )
 
@@ -440,7 +440,7 @@ export class CdpApi {
             const summary = await dualRead(
                 'hog-watcher.getPersistedState',
                 () => this.hogWatcher.getPersistedState(id),
-                () => this.hogWatcherMirror.getPersistedState(id),
+                () => this.hogWatcherMirror!.getPersistedState(id),
                 sameWatcherState
             )
             const hogFunction = await this.hogFunctionManager.fetchHogFunction(id)
@@ -456,7 +456,7 @@ export class CdpApi {
                 await dualWrite(
                     'hog-watcher.forceStateChange',
                     () => this.hogWatcher.forceStateChange(hogFunction, state),
-                    () => this.hogWatcherMirror.forceStateChange(hogFunction, state)
+                    () => this.hogWatcherMirror!.forceStateChange(hogFunction, state)
                 )
             }
 
@@ -467,7 +467,7 @@ export class CdpApi {
                 await dualRead(
                     'hog-watcher.getPersistedState',
                     () => this.hogWatcher.getPersistedState(id),
-                    () => this.hogWatcherMirror.getPersistedState(id),
+                    () => this.hogWatcherMirror!.getPersistedState(id),
                     sameWatcherState
                 )
             )
@@ -480,7 +480,7 @@ export class CdpApi {
                 const allStates = await dualRead(
                     'hog-watcher.getAllFunctionStates',
                     () => this.hogWatcher.getAllFunctionStates(),
-                    () => this.hogWatcherMirror.getAllFunctionStates(),
+                    () => this.hogWatcherMirror!.getAllFunctionStates(),
                     sameWatcherStates
                 )
 

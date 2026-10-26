@@ -36,12 +36,12 @@ export interface HogFlowInvocationPipelineDeps {
     hogFlowManager: HogFlowManagerService
     hogFlowExecutor: HogFlowExecutorService
     hogWatcher: HogWatcherService
-    hogWatcherMirror: HogWatcherService
+    hogWatcherMirror: HogWatcherService | null
     hogMasker: HogMaskerService
     hogFunctionMonitoringService: HogFunctionMonitoringService
     quotaLimiting: QuotaLimiting
     redis: RedisV2
-    valkeyShadow: CdpValkeyShadowPools
+    valkeyShadow: CdpValkeyShadowPools | null
     /** Absent for consumers that have no dead-letter topic; their build failures stay metrics-only. */
     deadLetterService?: InvocationFailureSink
 }
@@ -54,7 +54,7 @@ export interface HogFlowInvocationPipelineDeps {
  */
 export class HogFlowInvocationPipeline {
     private hogRateLimiter: KeyedRateLimiterService
-    private hogRateLimiterMirror: KeyedRateLimiterService
+    private hogRateLimiterMirror: KeyedRateLimiterService | null
 
     constructor(
         private config: HogFlowInvocationPipelineConfig,
@@ -67,7 +67,9 @@ export class HogFlowInvocationPipeline {
             ttlSeconds: config.CDP_RATE_LIMITER_TTL,
         }
         this.hogRateLimiter = new KeyedRateLimiterService(rateLimiterConfig, deps.redis)
-        this.hogRateLimiterMirror = new KeyedRateLimiterService(rateLimiterConfig, deps.valkeyShadow.writer)
+        this.hogRateLimiterMirror = deps.valkeyShadow
+            ? new KeyedRateLimiterService(rateLimiterConfig, deps.valkeyShadow.writer)
+            : null
     }
 
     public async buildInvocations(
@@ -139,7 +141,7 @@ export class HogFlowInvocationPipeline {
                 instrumentFn('cdpConsumer.handleEachBatch.hogWatcher.getEffectiveStates', async () => {
                     return await this.deps.hogWatcher.getEffectiveStates(hogFlowIds)
                 }),
-            () => this.deps.hogWatcherMirror.getEffectiveStates(hogFlowIds),
+            () => this.deps.hogWatcherMirror!.getEffectiveStates(hogFlowIds),
             sameWatcherStates
         )
 
@@ -153,7 +155,7 @@ export class HogFlowInvocationPipeline {
                 instrumentFn('cdpConsumer.handleEachBatch.hogRateLimiter.rateLimitGrouped', async () => {
                     return await this.hogRateLimiter.rateLimitGrouped(rateLimitInputs)
                 }),
-            () => this.hogRateLimiterMirror.rateLimitGrouped(rateLimitInputs),
+            () => this.hogRateLimiterMirror!.rateLimitGrouped(rateLimitInputs),
             (primary, secondary) =>
                 primary.every(([, result], index) => result.isRateLimited === secondary[index]?.[1].isRateLimited)
         )

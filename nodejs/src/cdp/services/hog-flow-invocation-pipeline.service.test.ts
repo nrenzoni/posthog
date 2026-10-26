@@ -1,5 +1,6 @@
 import { QuotaLimiting } from '../../common/services/quota-limiting.service'
 import { HogFunctionInvocationGlobals } from '../types'
+import { configureValkeyReads } from '../utils/dual-store'
 import { HogFlowInvocationPipeline } from './hog-flow-invocation-pipeline.service'
 import { HogFlowExecutorService } from './hogflows/hogflow-executor.service'
 import { HogFlowManagerService } from './hogflows/hogflow-manager.service'
@@ -52,6 +53,7 @@ describe('HogFlowInvocationPipeline', () => {
     let rateLimitGroupedMock: jest.Mock
 
     beforeEach(() => {
+        configureValkeyReads('')
         hogFlowManager = {
             getHogFlowsForTeams: jest.fn().mockResolvedValue({}),
         } as unknown as jest.Mocked<HogFlowManagerService>
@@ -99,6 +101,34 @@ describe('HogFlowInvocationPipeline', () => {
         // Both pools return the same result while reads still come from the primary, so the
         // mirror shares the primary's mock rather than drifting to a stale default.
         ;(pipeline as any).hogRateLimiterMirror.rateLimitGrouped = rateLimitGroupedMock
+    })
+
+    afterEach(() => configureValkeyReads(''))
+
+    it('runs the watcher and rate limiter exactly once without mirror services in single-store mode', async () => {
+        configureValkeyReads('', false)
+        pipeline = new HogFlowInvocationPipeline(config, {
+            ...pipeline['deps'],
+            valkeyShadow: null,
+            hogWatcherMirror: null,
+        })
+        const invocation = makeHogFlowInvocation()
+        hogFlowExecutor.buildHogFlowInvocations.mockResolvedValue({
+            invocations: [invocation],
+            metrics: [],
+            logs: [],
+            buildFailures: [],
+        })
+        hogWatcher.getEffectiveStates.mockResolvedValue({
+            [invocation.hogFlow.id]: { state: HogWatcherState.healthy, tokens: 1 },
+        })
+        const rateLimit = jest.mocked(pipeline['hogRateLimiter'].rateLimitGrouped)
+        rateLimit.mockResolvedValue([[invocation.hogFlow.id, { isRateLimited: false, tokensBefore: 2, tokens: 1 }]])
+
+        await expect(pipeline.buildInvocations([makeGlobals()])).resolves.toEqual([invocation])
+        expect(hogWatcher.getEffectiveStates).toHaveBeenCalledTimes(1)
+        expect(rateLimit).toHaveBeenCalledTimes(1)
+        expect(pipeline['hogRateLimiterMirror']).toBeNull()
     })
 
     it('returns empty when no hogflows match', async () => {

@@ -549,7 +549,7 @@ export class CdpSourceWebhooksConsumer extends CdpConsumerBase<PluginsServerConf
             dualRead(
                 'hog-watcher.getCachedEffectiveState',
                 () => this.hogWatcher.getCachedEffectiveState(webhookId),
-                () => this.hogWatcherMirror.getCachedEffectiveState(webhookId),
+                () => this.hogWatcherMirror!.getCachedEffectiveState(webhookId),
                 sameWatcherState
             ),
         ])
@@ -583,7 +583,7 @@ export class CdpSourceWebhooksConsumer extends CdpConsumerBase<PluginsServerConf
             dualWrite(
                 'hog-watcher.observeResultsBuffered',
                 () => this.hogWatcher.observeResultsBuffered(result),
-                () => this.hogWatcherMirror.observeResultsBuffered(result)
+                () => this.hogWatcherMirror!.observeResultsBuffered(result)
             )
         )
 

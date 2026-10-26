@@ -11,7 +11,7 @@ const mismatchWarningLogged = new Set<string>()
 /**
  * CDP features whose Redis calls also run against Valkey.
  *
- * Writes always go to both stores. Reads come from Redis until a feature is named in
+ * While shadowing is enabled, writes go to both stores. Reads come from Redis until a feature is named in
  * `CDP_VALKEY_READ_FEATURES`, which flips that feature — and only that feature — over to
  * Valkey. Listed roughly in the order they are safe to flip: the entries near the top
  * back caches and metrics, the ones near the bottom decide whether an invocation runs.
@@ -41,6 +41,7 @@ const mirrorOperationsTotal = new Counter({
 // Process-wide because the helpers below are free functions called from a dozen services that
 // have no other reason to carry config. Set once per process from `createCdpCoreServices`.
 let valkeyReadFeatures: ReadonlySet<MirrorFeature> = new Set()
+let valkeyShadowEnabled = true
 
 /**
  * Parses the comma-separated `CDP_VALKEY_READ_FEATURES` value. `*` selects every feature.
@@ -68,8 +69,13 @@ export function parseValkeyReadFeatures(raw: string): Set<MirrorFeature> {
     return new Set(names as MirrorFeature[])
 }
 
-export function configureValkeyReads(raw: string): void {
-    valkeyReadFeatures = parseValkeyReadFeatures(raw)
+export function configureValkeyReads(raw: string, shadowEnabled = true): void {
+    const features = parseValkeyReadFeatures(raw)
+    if (!shadowEnabled && features.size > 0) {
+        throw new Error('CDP_VALKEY_READ_FEATURES must be empty when CDP_VALKEY_SHADOW_ENABLED is false')
+    }
+    valkeyReadFeatures = features
+    valkeyShadowEnabled = shadowEnabled
     logger.info(
         '🪞',
         `[dual-store] reading from valkey: ${valkeyReadFeatures.size > 0 ? [...valkeyReadFeatures].join(', ') : '<none, all reads from redis>'}`
@@ -142,6 +148,7 @@ function order<T>(
  * feature currently reads from and recording whether the other returned equivalent data.
  *
  * The read source's errors propagate to the caller; the other store's are swallowed.
+ * With shadowing disabled, only the primary Redis callback runs (including mutating reads).
  */
 export async function dualRead<T>(
     label: MirrorLabel,
@@ -150,6 +157,10 @@ export async function dualRead<T>(
     isEquivalent: (primary: T, secondary: T) => boolean = isDeepStrictEqual,
     timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<T> {
+    if (!valkeyShadowEnabled) {
+        return redisCall()
+    }
+
     const { source, primary, secondary } = order(label, redisCall, valkeyCall)
 
     const primaryPromise = primary()
@@ -183,6 +194,7 @@ export async function dualRead<T>(
  * Failures on the store this feature reads from propagate to the caller, because they change
  * what the next read decides. Failures on the other store are logged and counted only — that
  * data is not being read, so a gap in it cannot affect behaviour.
+ * With shadowing disabled, only the primary Redis callback runs, exactly once.
  */
 export async function dualWrite(
     label: MirrorLabel,
@@ -190,6 +202,11 @@ export async function dualWrite(
     valkeyCall: () => Promise<unknown>,
     timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<void> {
+    if (!valkeyShadowEnabled) {
+        await redisCall()
+        return
+    }
+
     const { source, primary, secondary } = order(label, redisCall, valkeyCall)
 
     const [, secondaryResult] = await Promise.all([primary(), runSecondary(label, source, secondary, timeoutMs)])

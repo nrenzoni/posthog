@@ -250,7 +250,7 @@ export class CdpCyclotronWorker<
             await dualWrite(
                 'hog-watcher.observeResults',
                 () => this.hogWatcher.observeResults(invocationResults),
-                () => this.hogWatcherMirror.observeResults(invocationResults)
+                () => this.hogWatcherMirror!.observeResults(invocationResults)
             )
         } catch (err: any) {
             captureException(err)

@@ -10,6 +10,53 @@ describe('dual-store', () => {
         configureValkeyReads('')
     })
 
+    afterEach(() => configureValkeyReads(''))
+
+    describe('single-store mode', () => {
+        beforeEach(() => configureValkeyReads('', false))
+
+        it.each(['hog-masker', '*'])('rejects secondary reads for %s', (features) => {
+            expect(() => configureValkeyReads(features, false)).toThrow('CDP_VALKEY_READ_FEATURES must be empty')
+            expect(readSourceFor('hog-masker.filterByMasking')).toBe('redis')
+        })
+
+        it('executes a non-idempotent write once without touching the secondary', async () => {
+            let counter = 0
+            const primary = jest.fn(() => Promise.resolve(++counter))
+            const secondary = jest.fn(() => Promise.resolve(++counter))
+            await dualWrite('hog-watcher.observeResults', primary, secondary)
+            expect(counter).toBe(1)
+            expect(primary).toHaveBeenCalledTimes(1)
+            expect(secondary).not.toHaveBeenCalled()
+        })
+
+        it('returns a mutating read once without comparison, mirror logs or timers', async () => {
+            const primary = jest.fn().mockResolvedValue(1)
+            const secondary = jest.fn().mockRejectedValue(new Error('must not run'))
+            const compare = jest.fn()
+            const timer = jest.spyOn(global, 'setTimeout')
+            try {
+                await expect(dualRead('hog-masker.filterByMasking', primary, secondary, compare)).resolves.toBe(1)
+                expect(primary).toHaveBeenCalledTimes(1)
+                expect(secondary).not.toHaveBeenCalled()
+                expect(compare).not.toHaveBeenCalled()
+                expect(timer).not.toHaveBeenCalled()
+                expect(logger.warn).not.toHaveBeenCalled()
+            } finally {
+                timer.mockRestore()
+            }
+        })
+
+        it.each([dualRead, dualWrite])('propagates the primary failure without trying the secondary', async (call) => {
+            const error = new Error('primary unavailable')
+            const primary = jest.fn().mockRejectedValue(error)
+            const secondary = jest.fn().mockResolvedValue('fallback')
+            await expect(call('hog-watcher.observeResults', primary, secondary)).rejects.toBe(error)
+            expect(primary).toHaveBeenCalledTimes(1)
+            expect(secondary).not.toHaveBeenCalled()
+        })
+    })
+
     describe('parseValkeyReadFeatures', () => {
         it('throws on an unknown feature name rather than silently leaving reads on redis', () => {
             expect(() => parseValkeyReadFeatures('hog-masker,hog-waatcher')).toThrow(

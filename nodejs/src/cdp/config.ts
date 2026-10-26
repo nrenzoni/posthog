@@ -75,9 +75,10 @@ export type CdpConfig = ClickhouseConfig & {
     CDP_REDIS_READER_HOST: string
     CDP_REDIS_READER_PORT: number
 
-    // Valkey pool for dual-write/read. CDP_VALKEY_HOST is required: every CDP Redis call
-    // also runs against this pool, and a process without it is misconfigured rather than
-    // degraded.
+    // Disable to use only the primary CDP Redis endpoint, without shadow pools or workers.
+    // Defaults true to preserve the upstream dual-store rollout.
+    CDP_VALKEY_SHADOW_ENABLED: boolean
+    // Required only while shadowing is enabled.
     CDP_VALKEY_HOST: string
     CDP_VALKEY_PORT: number
     CDP_VALKEY_PASSWORD: string
@@ -86,8 +87,8 @@ export type CdpConfig = ClickhouseConfig & {
     // AWS ElastiCache Valkey Serverless requires TLS; toggle off only for local non-TLS test setups.
     CDP_VALKEY_TLS: boolean
     // Comma-separated list of features (see MIRROR_FEATURES in utils/dual-store.ts) whose reads
-    // are served from Valkey rather than Redis. `*` selects every feature. Writes always go to
-    // both stores regardless, so a feature can be flipped back by removing it from this list.
+    // are served from Valkey rather than Redis. `*` selects every feature.
+    // Must be empty with shadowing disabled. While enabled, writes always go to both stores.
     // Check the cdp_valkey_mirror_operations_total mismatch/failed counts for a feature before
     // flipping it: hog-watcher reads a missing key as healthy with a full token bucket.
     CDP_VALKEY_READ_FEATURES: string
@@ -323,6 +324,7 @@ export function getDefaultCdpConfig(): CdpConfig {
 
         // Points at the `valkey-cluster` compose service, which publishes on 6390 to stay
         // clear of the 6379 the primary CDP Redis already uses.
+        CDP_VALKEY_SHADOW_ENABLED: true,
         CDP_VALKEY_HOST: isTestEnv() || isDevEnv() ? '127.0.0.1' : '',
         CDP_VALKEY_PORT: isTestEnv() || isDevEnv() ? 6390 : 6379,
         CDP_VALKEY_PASSWORD: '',

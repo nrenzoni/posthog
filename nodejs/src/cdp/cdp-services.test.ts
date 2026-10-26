@@ -1,6 +1,18 @@
+import { getDefaultCommonConfig } from '~/common/config'
 import { RedisV2 } from '~/common/redis/redis-v2'
 
-import { createCdpReaderRedisPool, createCdpValkeyShadowPools } from './cdp-services'
+import {
+    CdpCoreServicesDeps,
+    createCdpCoreServices,
+    createCdpReaderRedisPool,
+    createCdpValkeyShadowPools,
+} from './cdp-services'
+import { getDefaultCdpConfig } from './config'
+import { configureValkeyReads } from './utils/dual-store'
+
+jest.mock('./outputs/registry', () => ({
+    createCdpOutputsRegistry: () => ({ build: () => ({}) }),
+}))
 
 const mockReaderPool: RedisV2 = {
     useClient: jest.fn((_opts, cb) => cb({ ping: () => Promise.resolve('PONG') } as any)),
@@ -110,6 +122,7 @@ describe('createCdpReaderRedisPool', () => {
 
 describe('createCdpValkeyShadowPools', () => {
     const valkeyConfig = {
+        CDP_VALKEY_SHADOW_ENABLED: true,
         CDP_VALKEY_HOST: 'cdp-valkey.internal',
         CDP_VALKEY_PORT: 6379,
         CDP_VALKEY_PASSWORD: 'secret',
@@ -124,10 +137,108 @@ describe('createCdpValkeyShadowPools', () => {
         jest.clearAllMocks()
     })
 
+    it('preserves shadowing by default', () => {
+        expect(getDefaultCdpConfig().CDP_VALKEY_SHADOW_ENABLED).toBe(true)
+    })
+
+    it('does not construct or ping a shadow pool when disabled, even without a host', () => {
+        const result = createCdpValkeyShadowPools(
+            { ...valkeyConfig, CDP_VALKEY_SHADOW_ENABLED: false, CDP_VALKEY_HOST: '' },
+            'single-store'
+        )
+        expect(result).toBeNull()
+        expect(createRedisV2PoolFromConfig).not.toHaveBeenCalled()
+        expect(mockReaderPool.useClient).not.toHaveBeenCalled()
+    })
+
+    it('retains the writer fallback and startup ping when enabled', () => {
+        expect(createCdpValkeyShadowPools(valkeyConfig, 'shadow')).toEqual({
+            writer: mockReaderPool,
+            reader: mockReaderPool,
+        })
+        expect(createRedisV2PoolFromConfig).toHaveBeenCalledTimes(1)
+        expect(mockReaderPool.useClient).toHaveBeenCalledTimes(1)
+    })
+
+    it('retains separate TLS reader configuration when enabled', () => {
+        createCdpValkeyShadowPools(
+            {
+                ...valkeyConfig,
+                CDP_VALKEY_TLS: true,
+                CDP_VALKEY_READER_HOST: 'reader.internal',
+                CDP_VALKEY_READER_PORT: 6380,
+            },
+            'shadow'
+        )
+        expect(createRedisV2PoolFromConfig).toHaveBeenCalledTimes(2)
+        expect(createRedisV2PoolFromConfig).toHaveBeenLastCalledWith({
+            connection: {
+                url: 'reader.internal',
+                options: { port: 6380, password: 'secret', commandTimeout: 1000, tls: {} },
+                name: 'shadow-shadow-reader',
+            },
+            poolMinSize: 1,
+            poolMaxSize: 4,
+        })
+        expect(mockReaderPool.useClient).toHaveBeenCalledTimes(2)
+    })
+
     it('throws when CDP_VALKEY_HOST is unset', () => {
         expect(() => createCdpValkeyShadowPools({ ...valkeyConfig, CDP_VALKEY_HOST: '' }, 'test-valkey')).toThrow(
             'CDP_VALKEY_HOST is required'
         )
         expect(createRedisV2PoolFromConfig).not.toHaveBeenCalled()
+    })
+})
+
+describe('createCdpCoreServices single-store startup', () => {
+    const config = {
+        ...getDefaultCommonConfig(),
+        ...getDefaultCdpConfig(),
+        CDP_VALKEY_SHADOW_ENABLED: false,
+        CDP_VALKEY_HOST: '',
+        CDP_VALKEY_READER_HOST: '',
+    }
+    const deps = {
+        postgres: {},
+        pubSub: { on: jest.fn() },
+        encryptedFields: {},
+        teamManager: {},
+        personRepository: {},
+        integrationManager: {},
+        cdpProducerRegistry: {},
+        internalCaptureService: {},
+        emailValidationValkey: null,
+        frequencyCapValkey: null,
+    } as unknown as CdpCoreServicesDeps
+
+    beforeEach(() => jest.clearAllMocks())
+    afterEach(() => configureValkeyReads(''))
+
+    it('starts with only the primary pool and no mirror watcher or secondary host', () => {
+        const services = createCdpCoreServices(config, deps)
+        expect(services.redis).toBe(mockReaderPool)
+        expect(services.valkeyShadow).toBeNull()
+        expect(services.hogWatcherMirror).toBeNull()
+        expect(createRedisV2PoolFromConfig).toHaveBeenCalledTimes(1)
+        expect(mockReaderPool.useClient).not.toHaveBeenCalled()
+    })
+
+    it('fails closed on secondary reads before opening any pools', () => {
+        expect(() => createCdpCoreServices({ ...config, CDP_VALKEY_READ_FEATURES: '*' }, deps)).toThrow(
+            'CDP_VALKEY_READ_FEATURES must be empty'
+        )
+        expect(createRedisV2PoolFromConfig).not.toHaveBeenCalled()
+    })
+
+    it('retains a separate non-event-emitting mirror watcher when enabled', () => {
+        const services = createCdpCoreServices(
+            { ...config, CDP_VALKEY_SHADOW_ENABLED: true, CDP_VALKEY_HOST: 'shadow.internal' },
+            deps
+        )
+        expect(services.valkeyShadow).not.toBeNull()
+        expect(services.hogWatcherMirror).not.toBe(services.hogWatcher)
+        expect(services.hogWatcherMirror?.['config'].sendEvents).toBe(false)
+        expect(createRedisV2PoolFromConfig).toHaveBeenCalledTimes(2)
     })
 })
