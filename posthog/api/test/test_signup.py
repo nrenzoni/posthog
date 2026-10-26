@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional, cast
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -794,7 +795,7 @@ class TestSignupAPI(APIBaseTest):
                 SOCIAL_AUTH_GITLAB_KEY="gitlab_123",
                 SOCIAL_AUTH_GITLAB_SECRET="gitlab_secret",
             ):
-                response = self.client.get(reverse("social:begin", kwargs={"backend": "gitlab"}))
+                response = self.client.post(reverse("social:begin", kwargs={"backend": "gitlab"}))
             self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
             url = reverse("social:complete", kwargs={"backend": "gitlab"})
@@ -830,7 +831,7 @@ class TestSignupAPI(APIBaseTest):
                 SOCIAL_AUTH_GITLAB_KEY="gitlab_123",
                 SOCIAL_AUTH_GITLAB_SECRET="gitlab_secret",
             ):
-                response = self.client.get(reverse("social:begin", kwargs={"backend": "gitlab"}))
+                response = self.client.post(reverse("social:begin", kwargs={"backend": "gitlab"}))
             self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
             url = reverse("social:complete", kwargs={"backend": "gitlab"})
@@ -873,7 +874,9 @@ class TestSignupAPI(APIBaseTest):
             SOCIAL_AUTH_GITHUB_KEY="github_123",
             SOCIAL_AUTH_GITHUB_SECRET="github_secret",
         ):
-            response = self.client.get(reverse("social:begin", kwargs={"backend": "github"}), begin_params)
+            response = self.client.post(
+                reverse("social:begin", kwargs={"backend": "github"}) + f"?{urlencode(begin_params)}"
+            )
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
         session = self.client.session
@@ -898,7 +901,7 @@ class TestSignupAPI(APIBaseTest):
     def test_api_social_login_cannot_create_second_organization(self, mock_sso_providers, mock_request):
         mock_sso_providers.return_value = {"gitlab": True}
         Organization.objects.create(name="Test org")
-        response = self.client.get(reverse("social:begin", kwargs={"backend": "gitlab"}))
+        response = self.client.post(reverse("social:begin", kwargs={"backend": "gitlab"}))
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         self.assertNotIn("/login?error_code", response.headers["Location"])
 
@@ -947,7 +950,7 @@ class TestSignupAPI(APIBaseTest):
                 invite.save()
 
         user_count = User.objects.count()
-        response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+        response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
         url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
@@ -1043,7 +1046,7 @@ class TestSignupAPI(APIBaseTest):
             )
             new_project = Team.objects.create(organization=new_org, name="My First Project")
             user_count = User.objects.count()
-            response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+            response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
             self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
             url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
@@ -1084,7 +1087,7 @@ class TestSignupAPI(APIBaseTest):
             organization=new_org,
         )  # note `jit_provisioning_enabled=False`
 
-        response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+        response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
         url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
@@ -1119,7 +1122,7 @@ class TestSignupAPI(APIBaseTest):
             LinkedIdentityProviderConfig.objects.create(organization_domain=domain, identity_provider_config=config)
             Team.objects.create(organization=new_org, name="Test Project")
 
-            response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+            response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
             self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
             url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
@@ -1164,7 +1167,7 @@ class TestSignupAPI(APIBaseTest):
             LinkedIdentityProviderConfig.objects.create(organization_domain=domain, identity_provider_config=config)
             Team.objects.create(organization=new_org, name="Test Project")
 
-            response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+            response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
             self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
             url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
@@ -1199,7 +1202,7 @@ class TestSignupAPI(APIBaseTest):
 
     def _complete_sso_for_email(self, mock_request, mock_sso_providers, email: str):
         mock_sso_providers.return_value = {"google-oauth2": True}
-        response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+        response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
         url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
         url += f"?code=2&state={response.client.session['google-oauth2_state']}"
@@ -1301,7 +1304,7 @@ class TestSignupAPI(APIBaseTest):
             organization=new_org,
         )  # note `verified_at=None`
 
-        response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+        response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
         url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
@@ -1332,7 +1335,7 @@ class TestSignupAPI(APIBaseTest):
             organization=new_org,
         )
 
-        response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+        response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
         url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
@@ -1359,7 +1362,7 @@ class TestSignupAPI(APIBaseTest):
             Organization.objects.create(name="Hogflix Movies")
             user_count = User.objects.count()
             org_count = Organization.objects.count()
-            response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+            response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
             self.assertEqual(response.status_code, 302)
 
             url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
@@ -1435,12 +1438,12 @@ class TestSignupAPI(APIBaseTest):
         self.assertIn("_auth_user_id", self.client.session)
 
     def _complete_sso_with_invite_id(self, mock_request, invite_id: str, email: str):
-        begin = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+        begin = self.client.post(
+            reverse("social:begin", kwargs={"backend": "google-oauth2"}) + f"?{urlencode({'invite_id': invite_id})}"
+        )
         self.assertEqual(begin.status_code, status.HTTP_302_FOUND)
         state = self.client.session["google-oauth2_state"]
-        session = self.client.session
-        session["invite_id"] = invite_id
-        session.save()
+        self.assertEqual(self.client.session["invite_id"], invite_id)
         url = reverse("social:complete", kwargs={"backend": "google-oauth2"}) + f"?code=2&state={state}"
         mock_request.return_value.json.return_value = {
             "access_token": "123",
@@ -1486,12 +1489,13 @@ class TestSignupAPI(APIBaseTest):
             org = self._org_enforcing_verified_domain()
             invite = OrganizationInvite.objects.create(organization=org, target_email="outsider@gmail.com")
 
-            begin = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+            begin = self.client.post(
+                reverse("social:begin", kwargs={"backend": "google-oauth2"})
+                + f"?{urlencode({'invite_id': str(invite.id)})}"
+            )
             self.assertEqual(begin.status_code, status.HTTP_302_FOUND)
             state = self.client.session["google-oauth2_state"]
-            session = self.client.session
-            session["invite_id"] = str(invite.id)
-            session.save()
+            self.assertEqual(self.client.session["invite_id"], str(invite.id))
 
             url = reverse("social:complete", kwargs={"backend": "google-oauth2"})
             url += f"?code=2&state={state}"
@@ -1546,7 +1550,7 @@ class TestSignupAPI(APIBaseTest):
             verified=True,
         )
 
-        response = self.client.get(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
+        response = self.client.post(reverse("social:begin", kwargs={"backend": "google-oauth2"}))
         self.assertEqual(response.status_code, status.HTTP_302_FOUND)
 
         url = reverse("social:complete", kwargs={"backend": "google-oauth2"})

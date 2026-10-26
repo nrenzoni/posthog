@@ -22,7 +22,7 @@ import { ERROR_MESSAGES } from 'scenes/authentication/shared/loginErrorMessages'
 import { userLogic } from 'scenes/userLogic'
 
 import type { SSOProvider, UserType } from '../../../types'
-import { getSocialLoginUrl } from '../SocialLoginButton/socialLoginUrl'
+import { submitSocialLogin } from '../SocialLoginButton/socialLoginUrl'
 import { modalInterruptionTrackingLogic } from './modalInterruptionTrackingLogic'
 
 export interface ReauthenticationForm {
@@ -434,32 +434,28 @@ export const timeSensitiveAuthenticationLogic = kea<timeSensitiveAuthenticationL
         beginSsoReauthentication: ({ provider }) => {
             const params = { email: values.user?.email || '', reauth: 'true' }
             const redirectInPage = (): void => {
-                window.location.href = getSocialLoginUrl(provider, {
-                    ...params,
-                    next: location.href.replace(location.origin, ''),
-                })
+                submitSocialLogin(provider, { ...params, next: location.href.replace(location.origin, '') }, {})
             }
-            // SAML posts back cross-site without the session cookie, so the backend runs a fresh login that can
-            // switch accounts. In a popup that switch would be invisible and the pending write would retry as
-            // the other account.
+            // Keep SAML full-page: unlike OAuth, its POST callback may lose a SameSite=Lax session
+            // on a distinct-site IdP. Never retry a pending write invisibly in another account.
+            // The backend still requires the original session's AuthnRequest binding.
             if (provider === 'saml') {
                 redirectInPage()
                 return
             }
             cache.ssoReauthAttempt = uuid()
             // A popup keeps this page, and the request waiting on re-auth, alive.
-            const popup = window.open(
-                getSocialLoginUrl(
-                    provider,
-                    { ...params, next: `${SSO_REAUTH_COMPLETE_PATH}?attempt=${cache.ssoReauthAttempt}` },
-                    {}
-                ),
-                'posthog-sso-reauth',
-                'popup,width=600,height=700'
-            )
+            const popup = window.open('', 'posthog-sso-reauth', 'popup,width=600,height=700')
             if (!popup) {
                 redirectInPage()
+                return
             }
+            submitSocialLogin(
+                provider,
+                { ...params, next: `${SSO_REAUTH_COMPLETE_PATH}?attempt=${cache.ssoReauthAttempt}` },
+                {},
+                'posthog-sso-reauth'
+            )
         },
         ssoReauthenticationFinished: ({ attempt, errorCode }) => {
             // Anyone can open the completion page, and every tab hears it. Only the attempt this tab started counts.

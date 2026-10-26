@@ -5,6 +5,7 @@ import { expectLogic } from 'kea-test-utils'
 
 import { lemonToast } from '@posthog/lemon-ui'
 
+import { getCookie } from 'lib/api'
 import { dayjs } from 'lib/dayjs'
 import { apiStatusLogic } from 'lib/logic/apiStatusLogic'
 import { ERROR_MESSAGES } from 'scenes/authentication/shared/loginErrorMessages'
@@ -30,6 +31,7 @@ describe('timeSensitiveAuthenticationLogic', () => {
     afterEach(() => {
         logic.unmount()
         jest.restoreAllMocks()
+        document.cookie = 'posthog_csrftoken=; Max-Age=0; path=/'
     })
 
     describe('initial state', () => {
@@ -175,10 +177,43 @@ describe('timeSensitiveAuthenticationLogic', () => {
     })
 
     describe('SSO re-authentication in a popup', () => {
+        let submittedForm: HTMLFormElement
+        let submitMock: jest.SpyInstance
+
+        beforeEach(() => {
+            document.cookie = 'posthog_csrftoken=reauth-csrf-token; path=/'
+            jest.mocked(getCookie).mockReturnValue('reauth-csrf-token')
+            userLogic.actions.loadUserSuccess(MOCK_DEFAULT_USER)
+            submitMock = jest
+                .spyOn(HTMLFormElement.prototype, 'submit')
+                .mockImplementation(function (this: HTMLFormElement) {
+                    submittedForm = this
+                })
+        })
+
         const startPopupAttempt = (): string => {
             const open = jest.spyOn(window, 'open').mockReturnValue({} as Window)
             logic.actions.beginSsoReauthentication('google-oauth2')
-            const next = new URL(open.mock.calls[0][0] as string, location.origin).searchParams.get('next')!
+            expect(open).toHaveBeenCalledWith('', 'posthog-sso-reauth', 'popup,width=600,height=700')
+            expect(submitMock).toHaveBeenCalledTimes(1)
+            expect(submittedForm.method).toBe('post')
+            expect(submittedForm.target).toBe('posthog-sso-reauth')
+            expect(Array.from(submittedForm.elements)).toEqual([
+                expect.objectContaining({
+                    tagName: 'INPUT',
+                    type: 'hidden',
+                    name: 'csrfmiddlewaretoken',
+                    value: 'reauth-csrf-token',
+                    disabled: false,
+                }),
+            ])
+            const action = new URL(submittedForm.action)
+            expect(action.origin).toBe(location.origin)
+            expect(action.pathname).toBe('/login/google-oauth2/')
+            expect(action.searchParams.get('email')).toBe(MOCK_DEFAULT_USER.email)
+            expect(action.searchParams.get('reauth')).toBe('true')
+            const next = action.searchParams.get('next')!
+            expect(new URL(next, location.origin).pathname).toBe('/reauth/complete')
             return new URL(next, location.origin).searchParams.get('attempt')!
         }
 
@@ -212,15 +247,36 @@ describe('timeSensitiveAuthenticationLogic', () => {
                 popup.close()
             }
         )
-        it('keeps SAML on the full-page redirect', () => {
-            const open = jest.spyOn(window, 'open')
-            // jsdom reports the page navigation as not implemented
-            jest.spyOn(console, 'error').mockImplementation(() => {})
+        it.each(['saml', 'google-oauth2'] as const)(
+            'POSTs %s in-page when SAML or a popup is blocked, preserving the current page',
+            (provider) => {
+                const open = jest.spyOn(window, 'open').mockReturnValue(null)
+                // A login-page `next` must not override the reauthentication destination.
+                router.actions.push('/login?next=/unrelated')
 
-            logic.actions.beginSsoReauthentication('saml')
+                logic.actions.beginSsoReauthentication(provider)
 
-            expect(open).not.toHaveBeenCalled()
-        })
+                expect(open).toHaveBeenCalledTimes(provider === 'saml' ? 0 : 1)
+                expect(submitMock).toHaveBeenCalledTimes(1)
+                expect(submittedForm.method).toBe('post')
+                expect(submittedForm.target).toBe('_self')
+                expect(Array.from(submittedForm.elements)).toEqual([
+                    expect.objectContaining({
+                        tagName: 'INPUT',
+                        type: 'hidden',
+                        name: 'csrfmiddlewaretoken',
+                        value: 'reauth-csrf-token',
+                        disabled: false,
+                    }),
+                ])
+                const action = new URL(submittedForm.action)
+                expect(action.pathname).toBe(`/login/${provider}/`)
+                expect(action.searchParams.get('email')).toBe(MOCK_DEFAULT_USER.email)
+                expect(action.searchParams.get('reauth')).toBe('true')
+                expect(action.searchParams.get('next')).toBe(location.href.replace(location.origin, ''))
+                expect(action.searchParams.get('idp')).toBe(provider === 'saml' ? 'posthog_custom' : null)
+            }
+        )
     })
 
     describe('failed SSO re-authentication', () => {

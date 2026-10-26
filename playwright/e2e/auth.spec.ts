@@ -54,7 +54,7 @@ test.describe('Auth', () => {
         await expect(page).toHaveURL(/\/project\/\d+/)
     })
 
-    test('Logout and verify Google login button has correct link', async ({ page }) => {
+    test('Logout and initiate Google login with a CSRF-protected POST', async ({ page }) => {
         // available_social_auth_providers comes from POSTHOG_APP_CONTEXT, which is server-rendered into the
         // login page HTML and read directly by preflightLogic on mount — so API mocks don't apply. Patch the
         // context before the page scripts run; mutating it after the page has loaded is racy and only
@@ -78,7 +78,19 @@ test.describe('Auth', () => {
 
         await page.locator('[data-attr=new-account-menu-logout-button]').click()
 
-        await expect(page.locator('a[href="/login/google-oauth2/"]')).toBeVisible()
+        const button = page.getByRole('button', { name: 'Log in with Google', exact: true })
+        await expect(button).toBeVisible()
+        const csrfCookie = (await page.context().cookies()).find((cookie) => cookie.name === 'posthog_csrftoken')
+        expect(csrfCookie?.value).toBeTruthy()
+        // Intercept locally: assert the browser contract without contacting a real OAuth provider.
+        await page.route('**/login/google-oauth2/**', (route) =>
+            route.fulfill({ status: 200, contentType: 'text/plain', body: 'SSO initiation intercepted' })
+        )
+        const initiation = page.waitForRequest((request) => new URL(request.url()).pathname === '/login/google-oauth2/')
+        await button.click()
+        const request = await initiation
+        expect(request.method()).toBe('POST')
+        expect(new URLSearchParams(request.postData() || '').get('csrfmiddlewaretoken')).toBe(csrfCookie?.value)
     })
 
     test('Try logging in improperly and then properly', async ({ page }) => {

@@ -261,16 +261,16 @@ class MultitenantSAMLAuth(SAMLAuth):
         )
         identity_provider = self.get_idp(idp_config)
         auth = self._create_saml_auth(idp=identity_provider)
-        # `return_to` sets the RelayState, a value the IdP echoes back in its POST to the
-        # (shared) auth_complete URL. The session cookie is SameSite=Lax and so is dropped on
-        # the IdP's cross-site POST, which would otherwise lose `next` and send the user to `/`;
-        # carrying it in RelayState lets the base `auth_complete` recover it for the post-login
-        # redirect. `idp` carries the linked config identifier since multiple IdPs share the URL.
-        # We deliberately omit the session key that upstream `SAMLAuth.auth_url` also packs into
-        # RelayState: it would be disclosed to the (potentially attacker-controlled) IdP in the
-        # redirect, and `next` alone is enough to recover the redirect without it.
+        # `return_to` carries tenant routing and the post-login redirect in RelayState.
+        # It does not replace the session-bound AuthnRequest ID: a callback without this
+        # browser's session must fail upstream request binding even if RelayState is valid.
+        # Never disclose the session key to the IdP in RelayState.
         relay_state = {"idp": identity_provider.name, "next": self.data.get("next")}
-        return auth.login(return_to=json.dumps(relay_state))
+        url = auth.login(return_to=json.dumps(relay_state))
+        self.strategy.session_set(
+            self._authn_request_id_session_key(identity_provider.name), auth.get_last_request_id()
+        )
+        return url
 
     def _get_attr(
         self,

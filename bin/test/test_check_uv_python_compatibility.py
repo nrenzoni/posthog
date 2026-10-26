@@ -35,10 +35,10 @@ class TestCheckUvPythonCompatibility(unittest.TestCase):
             ("unexpected_error", RuntimeError("boom")),
         ]
     )
-    def test_subprocess_failure_assumes_compatible(self, _name, error):
+    def test_subprocess_failure_is_not_compatibility_evidence(self, _name, error):
         with patch("bin.check_uv_python_compatibility.subprocess.run", side_effect=error):
             compatible, _message = check_uv_python_compatibility("0.11.28", "3.14.7")
-        self.assertTrue(compatible)
+        self.assertFalse(compatible)
 
 
 class TestLabelWorkflowPins(unittest.TestCase):

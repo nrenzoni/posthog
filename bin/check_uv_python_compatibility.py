@@ -167,11 +167,11 @@ def check_uv_python_compatibility(uv_version: str, python_version: str) -> tuple
             return True, "verified via uv python list"
         return False, f"Python {python_version} not available for uv {uv_version}"
     except subprocess.TimeoutExpired:
-        return True, "uv command timed out, assuming compatible"
+        return False, "uv command timed out; compatibility was not verified"
     except FileNotFoundError:
-        return True, "uvx not installed, assuming compatible"
+        return False, "uvx is required to verify Python download compatibility"
     except Exception as e:
-        return True, f"unable to verify ({type(e).__name__})"
+        return False, f"unable to verify compatibility ({type(e).__name__})"
 
 
 def _section(title: str) -> None:

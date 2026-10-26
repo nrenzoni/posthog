@@ -13,7 +13,7 @@ import { LoginMethod, SSOProvider } from '~/types'
 
 import passkeyLogo from './passkey.svg'
 import { SocialLoginIcon } from './SocialLoginIcon'
-import { getSocialLoginUrl } from './socialLoginUrl'
+import { submitSocialLogin } from './socialLoginUrl'
 
 interface SocialLoginLinkProps {
     provider: SSOProvider
@@ -25,26 +25,22 @@ interface SocialLoginLinkProps {
 function SocialLoginLink({ provider, extraQueryParams, onProviderClick, children }: SocialLoginLinkProps): JSX.Element {
     const { searchParams } = useValues(router)
 
-    const loginUrl = getSocialLoginUrl(provider, extraQueryParams, searchParams)
     const iframed = window !== window.parent
 
     return (
-        // eslint-disable-next-line react/forbid-elements
-        <a
+        <div
             className="block"
-            href={loginUrl}
-            onClick={
-                onProviderClick
-                    ? (event) => {
-                          event.preventDefault()
-                          onProviderClick(provider)
-                      }
-                    : undefined
-            }
-            {...(iframed && !onProviderClick ? { target: '_blank', rel: 'noopener' } : {})}
+            onClick={(event) => {
+                event.preventDefault()
+                if (onProviderClick) {
+                    onProviderClick(provider)
+                } else {
+                    submitSocialLogin(provider, extraQueryParams, searchParams, iframed ? '_blank' : '_self')
+                }
+            }}
         >
             {children}
-        </a>
+        </div>
     )
 }
 
@@ -72,6 +68,7 @@ export function SocialLoginButton({
             <div className="relative">
                 <LemonButton
                     size="large"
+                    aria-label={`Log in with ${SSO_PROVIDER_NAMES[provider]}`}
                     icon={<SocialLoginIcon provider={provider} />}
                     active={isLastUsed}
                     tooltip={SSO_PROVIDER_NAMES[provider]}

@@ -9,7 +9,7 @@ import posthog from 'posthog-js'
 
 import api from 'lib/api'
 import { ApiError } from 'lib/api-error'
-import { getSocialLoginUrl } from 'lib/components/SocialLoginButton/socialLoginUrl'
+import { submitSocialLogin } from 'lib/components/SocialLoginButton/socialLoginUrl'
 import { lemonToast } from 'lib/lemon-ui/LemonToast'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 import { isWebKitBrowser } from 'lib/utils/dom'
@@ -750,8 +750,7 @@ export const loginLogic = kea<loginLogicType>([
             ) {
                 breakpoint()
                 actions.startAutoRedirectToProvider(onlyMethod, email)
-                // `assign` rather than `replace` so the browser Back button returns to /login.
-                window.location.assign(getSocialLoginUrl(onlyMethod, { email }))
+                submitSocialLogin(onlyMethod, { email })
             }
         },
     })),

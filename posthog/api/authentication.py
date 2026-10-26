@@ -180,6 +180,7 @@ def axes_locked_out(*args, **kwargs):
     )
 
 
+@require_http_methods(["POST"])
 def sso_login(request: HttpRequest, backend: str) -> HttpResponse:
     sso_login_throttle = SSOLoginThrottle()
     if not sso_login_throttle.allow_request(cast(Request, request), view=cast(APIView, None)):
@@ -193,6 +194,18 @@ def sso_login(request: HttpRequest, backend: str) -> HttpResponse:
     # because SAML is configured at the domain-level, we have to assume it's enabled for someone in the instance
     sso_providers["saml"] = settings.EE_AVAILABLE
     sso_providers["oidc"] = settings.EE_AVAILABLE
+
+    # social-auth-core 5's do_auth reads request_data(merge=False), which on POST
+    # excludes the action URL's query parameters. Normalize initiation data here,
+    # not on callbacks: keep DjangoStrategy's usual POST-over-query precedence and
+    # give our query-based routing/session checks the same values as the backend.
+    # CSRF middleware has already validated the original POST body at this point.
+    initiation_data = request.GET.copy()
+    initiation_data.update(request.POST)
+    query_data = initiation_data.copy()
+    query_data.pop("csrfmiddlewaretoken", None)
+    request.GET = query_data  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
+    request.POST = initiation_data  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
     is_reauth = is_sso_reauth_begin(request)
 
@@ -212,6 +225,7 @@ def sso_login(request: HttpRequest, backend: str) -> HttpResponse:
         query_dict["next"] = (
             f"/account-connected/github-login?{urlencode({'provider': backend, 'connect_from': connect_from})}"
         )
+        initiation_data["next"] = query_dict["next"]
         request.GET = query_dict  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
     elif not is_reauth:
         # This is the default case - for regular login, we flush the session (log out)

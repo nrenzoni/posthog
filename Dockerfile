@@ -25,6 +25,8 @@
 #
 # ---------------------------------------------------------
 #
+ARG PYTHON_BASE=python:3.14.9-slim-trixie@sha256:35caba83af2fe6da9a5d922f9b0156f21d1246a48278c58a08bd253303ba42e8
+
 FROM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS native-go-build
 WORKDIR /code
 COPY clickhouse-udfs/util/scripts/build-legacy-v12.sh clickhouse-udfs/util/scripts/legacy-v12-provenance.json /code/clickhouse-udfs/util/scripts/
@@ -77,7 +79,7 @@ RUN bin/turbo --filter=@posthog/frontend build
 # Isolated stage for sourcemap upload - keeps secrets and external network calls
 # out of the main build cache. This stage produces no artifacts for the final image.
 #
-FROM node:24.22.1-bookworm-slim AS sourcemap-upload
+FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS sourcemap-upload
 WORKDIR /code
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
@@ -172,7 +174,6 @@ RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
 COPY products/canvas/packages/canvas_builder/ products/canvas/packages/canvas_builder/
 RUN --mount=type=cache,id=npm,target=/root/.npm \
     npm ci --ignore-scripts --omit=dev --no-audit --no-fund --prefix products/canvas/packages/canvas_builder
-
 COPY --from=native-go-build /artifacts/esbuild /tmp/posthog-esbuild
 ARG TARGETARCH
 RUN case "$TARGETARCH" in amd64) suffix=x64 ;; arm64) suffix=arm64 ;; *) exit 1 ;; esac && \
@@ -194,13 +195,27 @@ RUN cd /code/common/plugin_transpiler && \
 #
 # ---------------------------------------------------------
 #
-FROM ghcr.io/astral-sh/uv:0.13.4 AS uv
+FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
+
+# Build one coherent native XML stack. Do not combine new lxml wheels with
+# distribution XMLsec/libxslt linked against a different libxml2 ABI.
+FROM ${PYTHON_BASE} AS native-xml-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl libssl-dev pkg-config zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/selfhost/build-xml.sh /tmp/build-xml.sh
+RUN bash /tmp/build-xml.sh
 
 # Same as pyproject.toml so that uv can pick it up and doesn't need to download a different Python version.
-FROM python:3.14.7-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f AS posthog-build
+FROM ${PYTHON_BASE} AS posthog-build
 COPY --from=uv /uv /uvx /bin/
 WORKDIR /code
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
+COPY --from=native-xml-build /opt/posthog-native /opt/posthog-native
+ENV PATH=/opt/posthog-native/bin:$PATH \
+    PKG_CONFIG_PATH=/opt/posthog-native/lib/pkgconfig \
+    LDFLAGS="-Wl,-rpath,/opt/posthog-native/lib"
+RUN echo /opt/posthog-native/lib > /etc/ld.so.conf.d/posthog-native.conf && ldconfig
 
 # uv settings for Docker builds
 ENV UV_COMPILE_BYTECODE=1
@@ -213,8 +228,7 @@ RUN apt-get update && \
     "build-essential" \
     "git" \
     "libpq-dev" \
-    "libxmlsec1=1.2.37-2" \
-    "libxmlsec1-dev=1.2.37-2" \
+    "libssl-dev" \
     "libffi-dev" \
     "zlib1g-dev" \
     "pkg-config" \
@@ -222,8 +236,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies using cache mount for faster rebuilds
-# Cache ID includes libxmlsec1 version to bust cache when system library changes
-RUN --mount=type=cache,id=uv-libxmlsec1.2.37-2,target=/root/.cache/uv \
+# Cache ID includes the complete native chain to prevent incompatible wheel reuse.
+RUN --mount=type=cache,id=uv-native-xml2.15.4-xslt1.1.45-xmlsec1.3.12,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=tools/hogli,target=tools/hogli \
@@ -306,9 +320,13 @@ RUN apt-get update && \
 # ---------------------------------------------------------
 #
 # Same digest as the posthog-build stage, so the interpreter matches the one the wheels were built against.
-FROM python:3.14.7-slim-bookworm@sha256:9ab8d9c8514b44f90cf0029dd42fdd7e9e211e639c8b995304cc04568dee900f
+FROM ${PYTHON_BASE}
 WORKDIR /code
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
+COPY --from=native-xml-build /opt/posthog-native /opt/posthog-native
+COPY docker/selfhost/system-pip.lock /tmp/system-pip.lock
+RUN /usr/local/bin/python -m pip install --no-cache-dir --no-deps --require-hashes \
+    --requirement /tmp/system-pip.lock && rm /tmp/system-pip.lock
 ENV PYTHONUNBUFFERED=1
 # Granian embeds libpython instead of launching the python3 CLI, so PEP 538 C-locale
 # coercion never runs and open() defaults to ASCII under the container's bare locale.
@@ -317,23 +335,18 @@ ENV PYTHONUTF8=1
 ENV LANG=C.UTF-8
 # Install OS runtime dependencies.
 # Note: please add in this stage runtime dependences only!
-# Runtime-only shared libs: lxml/xmlsec are compiled --no-binary in the build stage (which keeps
-# its own -dev headers), so the final image needs the runtime .so, not the -dev headers/static libs.
-# libxmlsec1-openssl provides the OpenSSL crypto backend that libxmlsec1-dev used to pull in.
+# lxml and xmlsec use the same source-built XML/XSLT/XMLSec prefix as the build.
+# Their shared dependencies must remain aligned; do not add distribution XML
+# libraries here as a substitute for the prefix.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends --allow-downgrades \
+    apt-get install -y --no-install-recommends \
     # Upgrades the CA bundle that the pinned base image freezes.
     "ca-certificates" \
     # The deploy chart's asset-upload hook runs in this image and downloads s5cmd with curl.
     "curl" \
     "git" \
     "libpq5" \
-    "libxmlsec1=1.2.37-2" \
-    "libxmlsec1-openssl=1.2.37-2" \
-    "libxml2" \
-    # libssl pinned to the 3.0 series (ABI-stable), not an exact version: Debian rotates
-    # point releases out of the security archive, which breaks exact pins on uncached builds.
-    "libssl3=3.0.*" \
+    "libssl3t64" \
     "libjemalloc2" \
     # Numba's OpenMP backend needs the system libgomp runtime.
     "libgomp1" \
@@ -343,7 +356,8 @@ RUN apt-get update && \
     # Operators also need ps to find a PID for py-spy.
     "procps" \
     && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* && \
+    echo /opt/posthog-native/lib > /etc/ld.so.conf.d/posthog-native.conf && ldconfig
 
 # Note: no MS SQL ODBC driver is installed — the data-warehouse MSSQL source uses pymssql, which
 # bundles FreeTDS in its wheel and does not use msodbcsql18/unixodbc (there is no pyodbc in the tree).
@@ -430,6 +444,10 @@ RUN test -f products/stamphog/packages/pr-approval-agent/review_local.py && test
 # (posthog/api/oauth/mcp_resource_scopes.py) and the tasks permission broker. The rest of
 # services/ is a Node build (Dockerfile.node) and deliberately stays out of this image.
 COPY --chown=posthog:posthog services/mcp/schema services/mcp/schema/
+
+# Signup and user initialization read these generated assets at runtime.
+# A successful compiler invocation is not sufficient if an artifact is empty.
+RUN /python-runtime/bin/python -c "import json; from pathlib import Path; manifest = json.loads(Path('frontend/src/products.json').read_text()); assert manifest.get('products'), 'Generated product definitions are empty'; assert Path('frontend/dist/index.html').stat().st_size > 0, 'Frontend template is empty'"
 
 # Pre-compile first-party bytecode. Site-packages are already compiled (UV_COMPILE_BYTECODE=1), but
 # the app runs as `nobody` (bin/docker-server), which cannot write __pycache__ under the posthog-owned

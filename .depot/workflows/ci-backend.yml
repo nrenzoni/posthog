@@ -971,14 +971,14 @@ jobs:
               if: steps.schema-cache.outputs.cache-matched-key == ''
               uses: ./.depot/actions/setup-python-cached
               with:
-                  python-version: 3.14.7
+                  python-version: 3.14.9
                   token: ${{ secrets.POSTHOG_BOT_PAT }}
             - name: Install uv
               id: setup-uv
               if: steps.schema-cache.outputs.cache-matched-key == ''
               uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
               with:
-                  version: '0.13.4'
+                  version: '0.13.5'
                   enable-cache: true
                   cache-dependency-glob: uv.lock
                   save-cache: false
@@ -1120,7 +1120,7 @@ jobs:
             - name: Set up Python
               uses: ./.depot/actions/setup-python-cached
               with:
-                  python-version: 3.14.7
+                  python-version: 3.14.9
                   token: ${{ steps.setup-gh-token.outputs.token || github.token }}
             # Needs pnpm from the step above.
             - name: Install turbo
@@ -1525,7 +1525,7 @@ jobs:
             - name: Set up Python
               uses: ./.depot/actions/setup-python-cached
               with:
-                  python-version: 3.14.7
+                  python-version: 3.14.9
                   token: ${{ steps.setup-gh-token.outputs.token || github.token }}
             - name: Install uv
               uses: ./.depot/actions/setup-uv
@@ -1666,7 +1666,7 @@ jobs:
             - name: Set up Python
               uses: ./.depot/actions/setup-python-cached
               with:
-                  python-version: 3.14.7
+                  python-version: 3.14.9
                   token: ${{ steps.app-token.outputs.token || github.token }}
             - name: Install uv
               uses: ./.depot/actions/setup-uv
@@ -1748,14 +1748,14 @@ jobs:
             - name: Set up Python
               uses: ./.depot/actions/setup-python-cached
               with:
-                  python-version: 3.14.7
+                  python-version: 3.14.9
                   token: ${{ steps.setup-gh-token.outputs.token || github.token }}
             # Direct install: The job later checks out the PR head, which may predate the local action, so its post step would fail.
             - name: Install uv
               id: setup-uv
               uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
               with:
-                  version: '0.13.4'
+                  version: '0.13.5'
                   enable-cache: true
                   cache-dependency-glob: uv.lock
                   save-cache: ${{ env.IS_MASTER == 'true' }}
@@ -2468,14 +2468,14 @@ jobs:
             - name: Set up Python
               uses: ./.depot/actions/setup-python-cached
               with:
-                  python-version: 3.14.7
+                  python-version: 3.14.9
                   token: ${{ steps.setup-gh-token.outputs.token || github.token }}
             # Direct install: Generated changes target the PR head, which may predate the local action.
             - name: Install uv
               id: setup-uv
               uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
               with:
-                  version: '0.13.4'
+                  version: '0.13.5'
                   enable-cache: true
                   cache-dependency-glob: uv.lock
                   save-cache: ${{ env.IS_MASTER == 'true' }}
@@ -2756,7 +2756,7 @@ jobs:
                           segment: "Core",
                           "person-on-events": false,
                           "new-events-schema": false,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $n,
                           group: .,
@@ -2769,7 +2769,7 @@ jobs:
                           segment: "Core",
                           "person-on-events": false,
                           "new-events-schema": true,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $n,
                           group: .,
@@ -2784,7 +2784,7 @@ jobs:
                           segment: "Core",
                           "person-on-events": true,
                           "new-events-schema": false,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $n,
                           group: .,
@@ -2797,7 +2797,7 @@ jobs:
                           segment: "Core",
                           "person-on-events": true,
                           "new-events-schema": true,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $n,
                           group: .,
@@ -2812,7 +2812,7 @@ jobs:
                           segment: "Temporal",
                           "person-on-events": false,
                           "new-events-schema": false,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $n,
                           group: .,
@@ -2825,7 +2825,7 @@ jobs:
                           segment: "Temporal",
                           "person-on-events": false,
                           "new-events-schema": true,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $n,
                           group: .,
@@ -2847,7 +2847,7 @@ jobs:
                                   segment: "Core",
                                   "person-on-events": false,
                                   "new-events-schema": false,
-                                  "python-version": "3.14.7",
+                                  "python-version": "3.14.9",
                                   concurrency: 1,
                                   group: 1,
                                   compat: true,
@@ -2902,7 +2902,7 @@ jobs:
                           segment: "Core",
                           "person-on-events": false,
                           "new-events-schema": false,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $shards,
                           group: .,
@@ -2916,7 +2916,7 @@ jobs:
                           segment: "Core",
                           "person-on-events": false,
                           "new-events-schema": true,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $shards,
                           group: .,
@@ -2930,7 +2930,7 @@ jobs:
                           segment: "Core",
                           "person-on-events": true,
                           "new-events-schema": false,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $shards,
                           group: .,
@@ -2944,7 +2944,7 @@ jobs:
                           segment: "Core",
                           "person-on-events": true,
                           "new-events-schema": true,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $shards,
                           group: .,
@@ -2958,7 +2958,7 @@ jobs:
                           segment: "Temporal",
                           "person-on-events": false,
                           "new-events-schema": false,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $shards,
                           group: .,
@@ -2972,7 +2972,7 @@ jobs:
                           segment: "Temporal",
                           "person-on-events": false,
                           "new-events-schema": true,
-                          "python-version": "3.14.7",
+                          "python-version": "3.14.9",
                           "clickhouse-server-image": $image,
                           concurrency: $shards,
                           group: .,
@@ -2990,7 +2990,7 @@ jobs:
                               segment: "Core",
                               "person-on-events": false,
                               "new-events-schema": false,
-                              "python-version": "3.14.7",
+                              "python-version": "3.14.9",
                               compat: true,
                               artifact_key: ("compat-" + ((.key + 1)|tostring))
                             }
@@ -3025,7 +3025,7 @@ jobs:
                       "json-targets": true,
                       "person-on-events": false,
                       "new-events-schema": true,
-                      "python-version": "3.14.7",
+                      "python-version": "3.14.9",
                       "clickhouse-server-image": $image,
                       concurrency: $n,
                       group: .,
@@ -3159,7 +3159,7 @@ jobs:
               id: setup-uv-tests
               uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
               with:
-                  version: '0.13.4'
+                  version: '0.13.5'
                   enable-cache: true
                   cache-dependency-glob: uv.lock
                   save-cache: ${{ env.IS_MASTER == 'true' }}
@@ -4533,7 +4533,7 @@ jobs:
             - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
               if: steps.timing-reporter.outputs.available == 'true'
               with:
-                  version: '0.13.4'
+                  version: '0.13.5'
             - name: Download junit artifacts
               if: steps.timing-reporter.outputs.available == 'true'
               uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0

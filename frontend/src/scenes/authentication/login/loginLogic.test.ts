@@ -447,7 +447,8 @@ describe('loginLogic', () => {
     describe('auto-redirect to a single login method', () => {
         let logic: ReturnType<typeof loginLogic.build>
         let precheckResponse: Record<string, any>
-        let assignMock: jest.Mock
+        let submitMock: jest.SpyInstance
+        let submittedForm: HTMLFormElement
         const originalVendor = window.navigator.vendor
 
         beforeEach(() => {
@@ -462,16 +463,18 @@ describe('loginLogic', () => {
             router.actions.push('/login')
             logic = loginLogic()
             logic.mount()
-            assignMock = jest.fn()
-            Object.defineProperty(window, 'location', {
-                value: { ...window.location, assign: assignMock },
-                configurable: true,
-            })
+            submitMock = jest
+                .spyOn(HTMLFormElement.prototype, 'submit')
+                .mockImplementation(function (this: HTMLFormElement) {
+                    submittedForm = this
+                })
+            document.cookie = 'posthog_csrftoken=login-csrf-token'
         })
 
         afterEach(() => {
             logic.unmount()
             setVendor(originalVendor)
+            submitMock.mockRestore()
             jest.clearAllMocks()
         })
 
@@ -481,7 +484,22 @@ describe('loginLogic', () => {
             await expectLogic(logic).toDispatchActions(['precheckSuccess']).toFinishAllListeners()
 
             expect(logic.values.autoRedirectingToProvider).toBe('google-oauth2')
-            expect(assignMock).toHaveBeenCalledWith('/login/google-oauth2/?email=user%40example.com')
+            expect(submitMock).toHaveBeenCalledTimes(1)
+            expect(submittedForm.method).toBe('post')
+            expect(submittedForm.target).toBe('_self')
+            const action = new URL(submittedForm.action)
+            expect(action.origin).toBe(location.origin)
+            expect(action.pathname).toBe('/login/google-oauth2/')
+            expect(action.searchParams.get('email')).toBe('user@example.com')
+            expect(Array.from(submittedForm.elements)).toEqual([
+                expect.objectContaining({
+                    tagName: 'INPUT',
+                    type: 'hidden',
+                    name: 'csrfmiddlewaretoken',
+                    value: 'login-csrf-token',
+                    disabled: false,
+                }),
+            ])
         })
 
         it('does not redirect without autoAttempt, so autofill and ?email= links stay put', async () => {
@@ -490,7 +508,7 @@ describe('loginLogic', () => {
             await expectLogic(logic).toDispatchActions(['precheckSuccess']).toFinishAllListeners()
 
             expect(logic.values.autoRedirectingToProvider).toBe(null)
-            expect(assignMock).not.toHaveBeenCalled()
+            expect(submitMock).not.toHaveBeenCalled()
         })
 
         it('does not redirect when the account has more than one method', async () => {
@@ -504,7 +522,7 @@ describe('loginLogic', () => {
             logic.actions.precheck({ email: 'user@example.com', autoAttempt: true })
             await expectLogic(logic).toDispatchActions(['precheckSuccess']).toFinishAllListeners()
 
-            expect(assignMock).not.toHaveBeenCalled()
+            expect(submitMock).not.toHaveBeenCalled()
         })
 
         it('does not redirect when the account can use a password', async () => {
@@ -513,18 +531,18 @@ describe('loginLogic', () => {
             logic.actions.precheck({ email: 'user@example.com', autoAttempt: true })
             await expectLogic(logic).toDispatchActions(['precheckSuccess']).toFinishAllListeners()
 
-            expect(assignMock).not.toHaveBeenCalled()
+            expect(submitMock).not.toHaveBeenCalled()
         })
 
         it('redirects at most once per email', async () => {
             logic.actions.setLoginValue('email', 'user@example.com')
             logic.actions.precheck({ email: 'user@example.com', autoAttempt: true })
             await expectLogic(logic).toDispatchActions(['precheckSuccess']).toFinishAllListeners()
-            expect(assignMock).toHaveBeenCalledTimes(1)
+            expect(submitMock).toHaveBeenCalledTimes(1)
 
             logic.actions.precheck({ email: 'user@example.com', autoAttempt: true })
             await expectLogic(logic).toDispatchActions(['precheckSuccess']).toFinishAllListeners()
-            expect(assignMock).toHaveBeenCalledTimes(1)
+            expect(submitMock).toHaveBeenCalledTimes(1)
         })
     })
 

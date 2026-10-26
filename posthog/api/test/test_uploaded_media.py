@@ -65,6 +65,43 @@ class TestSniffImage(SimpleTestCase):
         assert sniffed is not None
         assert (sniffed.width, sniffed.height) == expected_size
 
+    @parameterized.expand([("png", False), ("apng", True)])
+    def test_sniffs_normal_png_and_apng(self, _name: str, animated: bool) -> None:
+        buffer = io.BytesIO()
+        first_frame = Image.new("RGBA", (3, 2), color="red")
+        if animated:
+            first_frame.save(
+                buffer,
+                format="PNG",
+                save_all=True,
+                append_images=[Image.new("RGBA", (3, 2), color="blue")],
+                duration=100,
+                loop=0,
+            )
+        else:
+            first_frame.save(buffer, format="PNG")
+
+        sniffed = sniff_image(buffer.getvalue())
+
+        assert sniffed is not None
+        assert sniffed.content_type == "image/png"
+        assert (sniffed.width, sniffed.height) == (3, 2)
+
+    def test_pixel_limit_is_inclusive_and_rejects_before_decoding(self) -> None:
+        buffer = io.BytesIO()
+        Image.new("RGB", (3, 2), color="red").save(buffer, format="PNG")
+        data = buffer.getvalue()
+
+        # Exercise the real header check with six pixels, not a large allocation.
+        with patch("posthog.models.uploaded_media._MAX_IMAGE_PIXELS", 6):
+            assert sniff_image(data) is not None
+        with (
+            patch("posthog.models.uploaded_media._MAX_IMAGE_PIXELS", 5),
+            patch("PIL.PngImagePlugin.PngImageFile.load") as load,
+        ):
+            assert sniff_image(data) is None
+            load.assert_not_called()
+
 
 @override_settings(MEDIA_ROOT=MEDIA_ROOT)
 class TestMediaAPI(APIBaseTest):
