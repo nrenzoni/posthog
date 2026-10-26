@@ -5,10 +5,17 @@
 # Use this for running standalone Node.js plugin server instances.
 #
 
+# The npm wrappers retain their exact API releases; rebuild only native payloads.
+FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS esbuild-native-build
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && rm -rf /var/lib/apt/lists/*
+COPY bin/build-esbuild-native /usr/local/bin/build-esbuild-native
+COPY pnpm-lock.yaml /tmp/pnpm-lock.yaml
+RUN bash /usr/local/bin/build-esbuild-native /tmp/pnpm-lock.yaml /opt/esbuild-native
+
 #
 # Build stage: Compile nodejs and dependencies
 #
-FROM ghcr.io/posthog/rust-node-container:bookworm_rust_1.91-node_24.22.1 AS nodejs-build
+FROM ghcr.io/posthog/rust-node-container:bookworm_rust_1.91-node_24.22.1@sha256:f0a8dbf007fb242ea4daba24527ddf0e52575fc07212835071ba58a48d237e2e AS nodejs-build
 
 # Compile and install system dependencies
 # Add Confluent's client repository for librdkafka 2.12.0
@@ -37,6 +44,13 @@ RUN apt-get update && \
     && \
     rm -rf /var/lib/apt/lists/*
 
+# Preserve only the exact vendor Kafka libraries, not Bookworm system libraries.
+# Their glibc/OpenSSL/CURL/SASL dependencies are supplied by Trixie at runtime.
+RUN mkdir -p /opt/librdkafka-runtime/lib && \
+    cp -L /usr/lib/$(gcc -dumpmachine)/librdkafka.so.1 /usr/lib/$(gcc -dumpmachine)/librdkafka++.so.1 /opt/librdkafka-runtime/lib/ && \
+    dpkg-query -W -f='${Package}=${Version}\n' librdkafka1 librdkafka++1 > /opt/librdkafka-runtime/packages.txt && \
+    (cd /opt/librdkafka-runtime/lib && sha256sum librdkafka.so.1 librdkafka++.so.1) > /opt/librdkafka-runtime/sha256sums.txt
+
 WORKDIR /code
 COPY turbo.json package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
 COPY ./bin/turbo ./bin/turbo
@@ -48,6 +62,7 @@ COPY ./common/hogvm/typescript/ ./common/hogvm/typescript/
 COPY ./nodejs/package.json ./nodejs/tsconfig.json ./nodejs/
 COPY ./common/replay-shared/package.json ./common/replay-shared/
 COPY ./common/replay-headless/package.json ./common/replay-headless/
+COPY bin/replace-esbuild-native.mjs ./bin/replace-esbuild-native.mjs
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
 # Use system librdkafka from Confluent (2.12.0) instead of bundled version
@@ -58,7 +73,9 @@ RUN --mount=type=cache,id=pnpm,target=/tmp/pnpm-store-v24 \
     corepack enable && \
     NODE_OPTIONS="--max-old-space-size=16384" CI=1 pnpm --filter=@posthog/nodejs... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && \
     NODE_OPTIONS="--max-old-space-size=16384" CI=1 pnpm --filter=@posthog/replay-headless... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && \
-    NODE_OPTIONS="--max-old-space-size=16384" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24 && \
+    NODE_OPTIONS="--max-old-space-size=16384" CI=1 pnpm --filter=@posthog/plugin-transpiler... install --frozen-lockfile --store-dir /tmp/pnpm-store-v24
+RUN --mount=from=esbuild-native-build,source=/opt/esbuild-native,target=/opt/esbuild-native \
+    node bin/replace-esbuild-native.mjs /code/node_modules/.pnpm /opt/esbuild-native /code/native-provenance && \
     NODE_OPTIONS="--max-old-space-size=16384" bin/turbo --filter=@posthog/plugin-transpiler build
 
 # Build the nodejs services
@@ -89,32 +106,33 @@ RUN NODE_OPTIONS="--max-old-space-size=16384" bin/turbo --filter=@posthog/nodejs
 #
 # Runtime stage: Minimal image with only nodejs runtime dependencies
 #
-FROM node:24.22.1-bookworm-slim
+FROM node:24.22.1-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea
 WORKDIR /code
 SHELL ["/bin/bash", "-e", "-o", "pipefail", "-c"]
 
-# Install runtime dependencies
-# Add Confluent's client repository for librdkafka runtime
+# Cross-distro native qualification is required: these are the builder's exact
+# Confluent 2.12 libraries, not a claim of vendor support for Trixie.
+# Do not add Bookworm OS repositories or copy its OpenSSL/glibc closure.
+COPY --from=nodejs-build /opt/librdkafka-runtime/lib/ /usr/local/lib/
+COPY --from=nodejs-build /opt/librdkafka-runtime/packages.txt /opt/librdkafka-runtime/sha256sums.txt /usr/local/share/posthog-native/librdkafka/
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     "ca-certificates" \
-    "wget" \
-    "gnupg" \
-    && \
-    mkdir -p /etc/apt/keyrings && \
-    wget -qO - https://packages.confluent.io/clients/deb/archive.key | gpg --dearmor -o /etc/apt/keyrings/confluent-clients.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/confluent-clients.gpg] https://packages.confluent.io/clients/deb/ bookworm main" > /etc/apt/sources.list.d/confluent-clients.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends --allow-downgrades \
-    "librdkafka1=2.12.0-1.cflt~deb12" \
-    "librdkafka++1=2.12.0-1.cflt~deb12" \
-    # libssl pinned to the 3.0 series (ABI-stable), not an exact version: Debian rotates
-    # point releases out of the security archive, which breaks exact pins on uncached builds.
-    "libssl3=3.0.*" \
+    "libcurl3t64-gnutls" \
+    "libsasl2-2" \
+    "libssl3t64" \
+    "libstdc++6" \
+    "zlib1g" \
     "curl" \
     "gettext-base" \
     "libjemalloc2" \
     && \
+    ldconfig && \
+    (cd /usr/local/lib && sha256sum --check /usr/local/share/posthog-native/librdkafka/sha256sums.txt) && \
+    ldd /usr/local/lib/librdkafka.so.1 /usr/local/lib/librdkafka++.so.1 > /tmp/librdkafka-ldd.txt && \
+    cat /tmp/librdkafka-ldd.txt && \
+    ! grep -q 'not found' /tmp/librdkafka-ldd.txt && \
+    rm -f /tmp/librdkafka-ldd.txt && \
     rm -rf /var/lib/apt/lists/*
 # curl: Required by bin/nodejs startup script to fetch EC2 metadata when INJECT_EC2_CLIENT_RACK is set
 # gettext-base: Provides envsubst command used by bin/nodejs to substitute environment variables in Kafka client IDs
@@ -154,6 +172,7 @@ COPY --from=nodejs-build --chown=posthog:posthog /code/common/replay-headless/di
 COPY --from=nodejs-build --chown=posthog:posthog /code/common/replay-headless/package.json /code/common/replay-headless/package.json
 COPY --from=nodejs-build --chown=posthog:posthog /code/nodejs/assets /code/nodejs/assets
 COPY --from=nodejs-build --chown=posthog:posthog /code/nodejs/bin /code/nodejs/bin
+COPY --from=nodejs-build --chown=posthog:posthog /code/native-provenance /usr/local/share/posthog-native
 
 
 # Setup ENV

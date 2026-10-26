@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Rebuild each locked esbuild release without changing its JavaScript protocol/API.
+set -euo pipefail
+lockfile=${1:?lockfile required}
+output=${2:?output directory required}
+case "$(dpkg --print-architecture)" in
+    amd64) go_sha=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40 ;;
+    arm64) go_sha=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49 ;;
+    *) echo 'Unsupported native esbuild architecture' >&2; exit 1 ;;
+esac
+arch=$(dpkg --print-architecture)
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+curl --fail --show-error --silent --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+    --retry 3 --connect-timeout 20 --max-time 300 \
+    "https://go.dev/dl/go1.27.3.linux-${arch}.tar.gz" -o "$work/go.tar.gz"
+printf '%s  %s\n' "$go_sha" "$work/go.tar.gz" | sha256sum --check --status
+tar -xzf "$work/go.tar.gz" -C "$work"
+export PATH="$work/go/bin:$PATH" GOTOOLCHAIN=local CGO_ENABLED=0
+mkdir -p "$output"
+# Both package and snapshot sections list releases; sort removes duplicates.
+versions=$(sed -n 's/^  esbuild@\([0-9][0-9.]*\):$/\1/p' "$lockfile" | sort -u)
+test -n "$versions"
+for version in $versions; do
+    case "$version" in
+        0.25.12) source_sha=eca56e4242e68ebde6f327458c71457e614a2b0564b30a45d60fc633e0ccaab4 ;;
+        0.27.3) source_sha=05d56070104b46d24c8921bfc4c83209d71cf583eb0396c13d0f359705bb5b61 ;;
+        0.27.7) source_sha=a2569028ce53f06531794e67388e760b343a1d5e77cef446a6ec07eeb96137f0 ;;
+        0.28.1) source_sha=65c756fa87d43178ac4a5242454c2bd0fde325f8ecf77997f8fa4b88f94d5cd2 ;;
+        0.28.2) source_sha=300162f899361d9f0263065f8728ef9086dcfc1a3d36bcbc4e0abe5de9c58bf8 ;;
+        *) echo "Unreviewed esbuild source release: $version" >&2; exit 1 ;;
+    esac
+    url="https://codeload.github.com/evanw/esbuild/tar.gz/refs/tags/v${version}"
+    curl --fail --show-error --silent --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+        --retry 3 --connect-timeout 20 --max-time 300 "$url" -o "$work/source.tar.gz"
+    printf '%s  %s\n' "$source_sha" "$work/source.tar.gz" | sha256sum --check --status
+    tar -xzf "$work/source.tar.gz" -C "$work"
+    mkdir -p "$output/$version"
+    (cd "$work/esbuild-$version" && go build -mod=readonly -trimpath -buildvcs=false -ldflags='-s -w' -o "$output/$version/esbuild" ./cmd/esbuild)
+    test "$("$output/$version/esbuild" --version)" = "$version"
+    go version -m "$output/$version/esbuild" > "$output/$version/build-info.txt"
+    binary_sha=$(sha256sum "$output/$version/esbuild" | cut -d ' ' -f 1)
+    printf '{"version":"%s","source":"%s","sourceSha256":"%s","go":"go1.27.3","goArchiveSha256":"%s","architecture":"%s","binarySha256":"%s"}\n' \
+        "$version" "$url" "$source_sha" "$go_sha" "$arch" "$binary_sha" > "$output/$version/provenance.json"
+done
