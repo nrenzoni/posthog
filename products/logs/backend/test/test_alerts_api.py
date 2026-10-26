@@ -102,6 +102,41 @@ class TestLogsAlertAPI(APIBaseTest):
         assert response.status_code == status.HTTP_201_CREATED, response.json()
         return response.json()
 
+    @patch.dict("os.environ", {"LOGS_ALERT_CHECK_INTERVAL_MINUTES": "5"})
+    def test_operator_cadence_defaults_to_five_and_client_cannot_override(self):
+        data = self._create_via_api(enabled=False, check_interval_minutes=1)
+        assert data["check_interval_minutes"] == 5
+        alert = LogsAlertConfiguration.objects.get(pk=data["id"])
+        assert alert.check_interval_minutes == 5
+
+    @patch.dict("os.environ", {"LOGS_ALERT_CHECK_INTERVAL_MINUTES": "1"})
+    def test_operator_minute_cadence_is_persisted_and_remains_read_only(self):
+        data = self._create_via_api(enabled=False, check_interval_minutes=5)
+        assert data["check_interval_minutes"] == 1
+        with patch.dict("os.environ", {"LOGS_ALERT_CHECK_INTERVAL_MINUTES": "5"}):
+            response = self.client.patch(
+                f"{self.base_url}{data['id']}/",
+                {"name": "Renamed", "check_interval_minutes": 5},
+                format="json",
+            )
+            assert response.status_code == status.HTTP_200_OK
+            assert response.json()["check_interval_minutes"] == 1
+        assert LogsAlertConfiguration.objects.get(pk=data["id"]).check_interval_minutes == 1
+
+    @parameterized.expand(["0", "6", "-1", "1.5", "invalid"])
+    def test_invalid_operator_cadence_does_not_create_a_rule(self, value):
+        before = LogsAlertConfiguration.objects.filter(team=self.team).count()
+        with patch.dict("os.environ", {"LOGS_ALERT_CHECK_INTERVAL_MINUTES": value}):
+            response = self.client.post(self.base_url, self._valid_payload(enabled=False), format="json")
+        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        assert response.json() == {
+            "type": "server_error",
+            "code": "error",
+            "detail": "A server error occurred.",
+            "attr": None,
+        }
+        assert LogsAlertConfiguration.objects.filter(team=self.team).count() == before
+
     # --- CRUD ---
 
     @patch("products.logs.backend.presentation.views.alerts_api.report_user_action")

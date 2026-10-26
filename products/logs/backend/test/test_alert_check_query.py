@@ -3,11 +3,14 @@ import re
 import json
 import datetime as dt
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import unittest
 import time_machine
 from posthog.test.base import APIBaseTest, ClickhouseTestMixin
 from unittest.mock import patch
+
+from django.core.exceptions import ImproperlyConfigured
 
 from parameterized import parameterized
 
@@ -2252,6 +2255,14 @@ class TestBatchedQueryPredicateHoistingEmptyScan(ClickhouseTestMixin, APIBaseTes
 
 
 class TestFetchLiveLogsCheckpoint(APIBaseTest):
+    @parameterized.expand([("ingestion_checkpoint",), ("scheduled_time",)])
+    @patch("products.logs.backend.alert_check_query.execute_hogql_query")
+    def test_checkpoint_query_errors_are_not_converted_to_missing_checkpoints(self, mode, mock_execute):
+        mock_execute.side_effect = RuntimeError("checkpoint unavailable")
+        with patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": mode}):
+            with self.assertRaisesRegex(RuntimeError, "checkpoint unavailable"):
+                fetch_live_logs_checkpoint(self.team)
+
     @patch("products.logs.backend.alert_check_query.execute_hogql_query")
     def test_returns_datetime_from_response(self, mock_execute):
         mock_response = type("R", (), {"results": [[datetime(2025, 1, 1, 12, 34, 56, tzinfo=UTC)]]})()
@@ -2285,6 +2296,7 @@ class TestFetchLiveLogsCheckpoint(APIBaseTest):
         assert result is not None and result.tzinfo is not None
 
 
+@patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": "ingestion_checkpoint"})
 class TestResolveAlertDateTo(unittest.TestCase):
     NEXT_CHECK_AT = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -2311,6 +2323,148 @@ class TestResolveAlertDateTo(unittest.TestCase):
     def test_checkpoint_exactly_at_threshold_is_still_used(self):
         checkpoint = self.NEXT_CHECK_AT - CHECKPOINT_MAX_STALENESS
         assert resolve_alert_date_to(self.NEXT_CHECK_AT, checkpoint) == checkpoint
+
+    def test_unset_mode_preserves_checkpoint_default(self):
+        with patch.dict(os.environ):
+            os.environ.pop("LOGS_ALERT_WINDOW_END_MODE", None)
+            checkpoint = self.NEXT_CHECK_AT - dt.timedelta(seconds=30)
+            assert resolve_alert_date_to(self.NEXT_CHECK_AT, checkpoint) == checkpoint
+
+    @parameterized.expand([("",), ("wall_clock",), ("SCHEDULED_TIME",), ("scheduled_time ",)])
+    def test_invalid_mode_fails_closed(self, mode):
+        with patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": mode}):
+            with self.assertRaisesRegex(ImproperlyConfigured, "LOGS_ALERT_WINDOW_END_MODE"):
+                resolve_alert_date_to(self.NEXT_CHECK_AT, None)
+
+    @parameterized.expand(
+        [
+            ("missing", None),
+            ("fresh", dt.timedelta(seconds=-30)),
+            ("threshold", -CHECKPOINT_MAX_STALENESS),
+            ("stale", -CHECKPOINT_MAX_STALENESS - dt.timedelta(microseconds=1)),
+            ("equal", dt.timedelta()),
+            ("future", dt.timedelta(minutes=10)),
+        ]
+    )
+    def test_scheduled_time_opt_in_ignores_checkpoint_but_not_scheduled_slot(self, _name, offset):
+        checkpoint = None if offset is None else self.NEXT_CHECK_AT + offset
+        with patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": "scheduled_time"}):
+            assert resolve_alert_date_to(self.NEXT_CHECK_AT, checkpoint) == self.NEXT_CHECK_AT
+
+    @parameterized.expand([("ingestion_checkpoint",), ("scheduled_time",)])
+    def test_late_execution_and_retry_keep_scheduled_window_not_execution_now(self, mode):
+        checkpoint = self.NEXT_CHECK_AT - dt.timedelta(seconds=30)
+        with patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": mode}):
+            ends = []
+            for lag in (dt.timedelta(), dt.timedelta(minutes=2), dt.timedelta(hours=1)):
+                with time_machine.travel(self.NEXT_CHECK_AT + lag, tick=False):
+                    ends.append(resolve_alert_date_to(self.NEXT_CHECK_AT, checkpoint))
+            expected = checkpoint if mode == "ingestion_checkpoint" else self.NEXT_CHECK_AT
+            assert ends == [expected] * 3
+
+    def test_scheduled_time_advances_duplicate_checkpoint_windows_by_cadence(self):
+        checkpoint = self.NEXT_CHECK_AT - dt.timedelta(seconds=30)
+        with patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": "scheduled_time"}):
+            ends = [resolve_alert_date_to(self.NEXT_CHECK_AT + dt.timedelta(minutes=i), checkpoint) for i in range(5)]
+        assert ends == [self.NEXT_CHECK_AT + dt.timedelta(minutes=i) for i in range(5)]
+
+    def test_default_staleness_boundary_retains_microsecond_precision(self):
+        checkpoint = self.NEXT_CHECK_AT - CHECKPOINT_MAX_STALENESS
+        assert resolve_alert_date_to(self.NEXT_CHECK_AT, checkpoint) == checkpoint
+        assert (
+            resolve_alert_date_to(self.NEXT_CHECK_AT, checkpoint - dt.timedelta(microseconds=1)) == self.NEXT_CHECK_AT
+        )
+
+
+class TestQuietStreamAlertWindows(ClickhouseTestMixin, APIBaseTest):
+    """Exact event/observed skew from the immutable recovery drill, not an epsilon approximation."""
+
+    CHECKPOINT = datetime(2026, 10, 26, 1, 40, 1, 435189, tzinfo=UTC)
+    EVENT = CHECKPOINT + dt.timedelta(microseconds=217)
+    FIRST_SLOT = datetime(2026, 10, 26, 1, 41, tzinfo=UTC)
+
+    def _alert(self):
+        return LogsAlertConfiguration.objects.create(
+            team=self.team,
+            name="quiet-stream-skew",
+            filters={"serviceNames": [f"quiet-stream-skew-{uuid4()}"]},
+        )
+
+    def _counts(self, alert, date_to):
+        return BatchedAlertCheckQuery(
+            team=self.team,
+            alerts=[alert],
+            date_from=date_to - dt.timedelta(minutes=6),
+            date_to=date_to,
+            projection_eligible=False,
+        ).execute_rolling_checks(nca=date_to, window_minutes=5, cadence_minutes=1, period_count=2)
+
+    @parameterized.expand(
+        [
+            ("ingestion_checkpoint", [[0, 0]] * 5 + [[1, 0]]),
+            ("scheduled_time", [[0, 1]] + [[1, 1]] * 4 + [[1, 0]]),
+        ]
+    )
+    def test_217us_skew_quiet_stream_over_six_genuine_queries(self, mode, expected):
+        alert = self._alert()
+        row = _log_row(
+            self.team.pk, f"{alert.id}-quiet-skew-event", self.EVENT.isoformat(), alert.filters["serviceNames"][0]
+        )
+        sync_execute("INSERT INTO logs FORMAT JSONEachRow\n" + json.dumps(row))
+        actual = []
+        with patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": mode}):
+            for minute in range(6):
+                slot = self.FIRST_SLOT + dt.timedelta(minutes=minute)
+                end = resolve_alert_date_to(slot, self.CHECKPOINT)
+                result = self._counts(alert, end)
+                actual.append([bucket.count for bucket in result.per_alert[str(alert.id)]])
+        assert actual == expected
+
+    @parameterized.expand([("ingestion_checkpoint",), ("scheduled_time",)])
+    def test_half_open_microsecond_boundaries_are_preserved(self, mode):
+        alert = self._alert()
+        with patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": mode}):
+            end = resolve_alert_date_to(self.FIRST_SLOT, self.CHECKPOINT)
+        start = end - dt.timedelta(minutes=5)
+        times = [start - dt.timedelta(microseconds=1), start, end - dt.timedelta(microseconds=1), end]
+        rows = [
+            _log_row(
+                self.team.pk, f"{alert.id}-quiet-boundary-{i}", timestamp.isoformat(), alert.filters["serviceNames"][0]
+            )
+            for i, timestamp in enumerate(times)
+        ]
+        sync_execute("INSERT INTO logs FORMAT JSONEachRow\n" + "\n".join(json.dumps(row) for row in rows))
+        result = self._counts(alert, end)
+        assert result.per_alert[str(alert.id)][-1].count == 2
+
+    def test_scheduled_time_is_not_a_completeness_watermark_for_late_data(self):
+        alert = self._alert()
+        with patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": "scheduled_time"}):
+            end = resolve_alert_date_to(self.FIRST_SLOT, self.CHECKPOINT)
+            before = self._counts(alert, end)
+            assert before.per_alert[str(alert.id)][-1].count == 0
+            row = _log_row(
+                self.team.pk, f"{alert.id}-late-skew-event", self.EVENT.isoformat(), alert.filters["serviceNames"][0]
+            )
+            sync_execute("INSERT INTO logs FORMAT JSONEachRow\n" + json.dumps(row))
+            retry_end = resolve_alert_date_to(self.FIRST_SLOT, self.CHECKPOINT)
+            assert retry_end == end
+            after = self._counts(alert, retry_end)
+            assert after.per_alert[str(alert.id)][-1].count == 1
+
+    @parameterized.expand([("ingestion_checkpoint",), ("scheduled_time",)])
+    def test_count_query_failure_is_not_a_successful_zero_or_recovery(self, mode):
+        alert = self._alert()
+        with (
+            patch.dict(os.environ, {"LOGS_ALERT_WINDOW_END_MODE": mode}),
+            patch(
+                "products.logs.backend.alert_check_query.execute_hogql_query",
+                side_effect=RuntimeError("count query failed"),
+            ),
+        ):
+            end = resolve_alert_date_to(self.FIRST_SLOT, self.CHECKPOINT)
+            with self.assertRaisesRegex(RuntimeError, "count query failed"):
+                self._counts(alert, end)
 
 
 class TestRollingCheckRanges(unittest.TestCase):

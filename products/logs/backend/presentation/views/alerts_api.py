@@ -69,6 +69,7 @@ from products.alerts_platform.backend.facade.scheduling import validate_and_norm
 from products.alerts_platform.backend.presentation.views.platform_alert import GroupingSerializer
 from products.alerts_platform.backend.presentation.views.schedule_restriction import ScheduleRestrictionField
 from products.logs.backend.alert_check_query import AlertCheckQuery, BucketedCount
+from products.logs.backend.alert_creation import _default_check_interval_minutes
 from products.logs.backend.alert_destinations import (
     EVENT_KIND_CONFIG,
     EVENT_KINDS,
@@ -123,10 +124,6 @@ class LogsAlertListQuerySerializer(serializers.Serializer):
 
 
 STATE_TIMELINE_LOOKBACK_HOURS = 24
-# Mirrors LogsAlertConfiguration.check_interval_minutes' default — used as the
-# simulate endpoint's default cadence so it matches production when callers
-# don't override it.
-DEFAULT_CHECK_INTERVAL_MINUTES = 5
 _SENTINEL: Final = object()
 _NOT_ANNOTATED: Final = object()
 _SINGLE_INSTANCE: Final = Grouping()
@@ -882,6 +879,9 @@ class LogsAlertConfigurationSerializer(serializers.ModelSerializer):
     def create(self, validated_data: dict) -> LogsAlertConfiguration:
         validated_data["team_id"] = self.context["team_id"]
         validated_data["created_by"] = self.context["request"].user
+        # Operator deployment setting, never a client-writable rule field. Set
+        # only on creation so a restart cannot rewrite existing rule history.
+        validated_data["check_interval_minutes"] = _default_check_interval_minutes()
 
         if not validated_data.get("name", "").strip():
             validated_data["name"] = "Untitled alert"
@@ -1009,7 +1009,7 @@ class LogsAlertSimulateRequestSerializer(serializers.Serializer):
         help_text="Window size in minutes — determines bucket interval.",
     )
     check_interval_minutes = serializers.IntegerField(
-        default=DEFAULT_CHECK_INTERVAL_MINUTES,
+        default=_default_check_interval_minutes,
         min_value=1,
         max_value=max(ALLOWED_WINDOW_MINUTES),
         help_text="How often the alert is evaluated, in minutes.",

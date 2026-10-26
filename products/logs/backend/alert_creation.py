@@ -4,6 +4,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 
 from posthog.models.team.team import Team
@@ -20,6 +21,22 @@ MAX_ALERTS_PER_TEAM = 20
 UNCAPPED_ALERT_TEAM_IDS: frozenset[int] = frozenset(
     int(t) for x in os.environ.get("LOGS_ALERTS_UNCAPPED_TEAM_IDS", "").split(",") if (t := x.strip()).isdigit()
 )
+
+
+def _default_check_interval_minutes() -> int:
+    """Operator-only cadence for new rules; existing schedules remain unchanged.
+
+    The native scheduler already ticks each minute. This does not grant the
+    separate paid Insight real-time alert entitlement or accept rule API input.
+    """
+    raw = os.environ.get("LOGS_ALERT_CHECK_INTERVAL_MINUTES", "5")
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ImproperlyConfigured("LOGS_ALERT_CHECK_INTERVAL_MINUTES must be an integer from 1 to 5.") from error
+    if not 1 <= value <= 5:
+        raise ImproperlyConfigured("LOGS_ALERT_CHECK_INTERVAL_MINUTES must be an integer from 1 to 5.")
+    return value
 
 
 class AlertLimitReached(Exception):

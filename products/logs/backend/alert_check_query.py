@@ -1,3 +1,4 @@
+import os
 import time
 import datetime as dt
 from collections.abc import Sequence
@@ -5,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo
+
+from django.core.exceptions import ImproperlyConfigured
 
 from posthog.schema import (
     DateRange,
@@ -771,14 +774,25 @@ def fetch_live_logs_checkpoint(
 
 
 def resolve_alert_date_to(nca: dt.datetime, checkpoint: dt.datetime | None) -> dt.datetime:
-    """Anchor `date_to` on the alert's scheduled `next_check_at`, clamped to the
-    ingestion checkpoint when the checkpoint is fresh enough.
+    """Resolve a window end using the operator's explicit freshness policy.
 
-    Anchoring on `next_check_at` (not wall-clock-now) is what makes the query
-    window deterministic across retries and immune to scheduler lag — two evals
-    of the same alert at different actual eval times produce the same `date_to`
-    and thus the same query.
+    Both modes anchor on scheduled `next_check_at`, never execution-time now:
+    retries of a slot retain its end (assuming the same checkpoint/policy).
+    The default preserves the upstream checkpoint clamp and stale/missing fallback.
+    The checkpoint tracks *observed* time, not event-time completeness: quiet
+    streams and event/observed clock skew can pin a raw timestamp query behind
+    an already ingested event until the five-minute fallback.
+
+    `scheduled_time` is an operator opt-in to advancing scheduled windows despite
+    ingestion lag. Results may be incomplete and can falsely fire/resolve for
+    late or missing data; this is NOT a complete-data watermark or a recovery SLO.
+    It does not suppress checkpoint or count-query errors at their call sites.
     """
+    mode = os.environ.get("LOGS_ALERT_WINDOW_END_MODE", "ingestion_checkpoint")
+    if mode not in {"ingestion_checkpoint", "scheduled_time"}:
+        raise ImproperlyConfigured("LOGS_ALERT_WINDOW_END_MODE must be ingestion_checkpoint or scheduled_time.")
+    if mode == "scheduled_time":
+        return nca
     if checkpoint is None or (nca - checkpoint) > CHECKPOINT_MAX_STALENESS:
         return nca
     return min(nca, checkpoint)

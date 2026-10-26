@@ -51,6 +51,10 @@ if TYPE_CHECKING:
 MAX_CUSTOM_COLUMNS = 50
 
 
+# Observed-time ingestion progress, not an event-time completeness watermark:
+# event timestamps can exceed observed timestamps (including on a quiet stream).
+# Keep the per-partition minimum for ingestion-lag consumers; alert window policy
+# is resolved separately in alert_check_query.resolve_alert_date_to.
 LIVE_LOGS_CHECKPOINT_QUERY = parse_select(
     """
     SELECT min(partition_checkpoint) FROM (
